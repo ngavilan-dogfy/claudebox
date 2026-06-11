@@ -5,7 +5,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iptables ipset dnsutils util-linux \
  && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @anthropic-ai/claude-code
+# CACHE_BUST is set by `cbox update` to force a fresh claude-code install
+ARG CACHE_BUST=0
+RUN echo "cache-bust=$CACHE_BUST" >/dev/null \
+ && npm install -g @anthropic-ai/claude-code
 
 # On native Linux the container user must match the host UID/GID or
 # bind-mounted repos end up with broken ownership (macOS VMs map this for you).

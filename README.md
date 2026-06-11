@@ -6,9 +6,10 @@
 
 *Internet sí. Tu máquina y tu LAN, nunca.*
 
+![Release](https://img.shields.io/github/v/release/ngavilan-dogfy/claudebox?color=blueviolet)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20WSL2-blue)
 ![Runtime](https://img.shields.io/badge/runtime-Docker%20%7C%20Podman%20%7C%20OrbStack-2496ED?logo=docker&logoColor=white)
-![Shell](https://img.shields.io/badge/bash-3.2%2B-4EAA25?logo=gnubash&logoColor=white)
+![Go](https://img.shields.io/badge/Go-zero%20deps-00ADD8?logo=go&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Claude Code](https://img.shields.io/badge/Claude%20Code-sandboxed-D97757?logo=anthropic&logoColor=white)
 
@@ -29,7 +30,11 @@ directorio del proyecto.
 - 🔑 **Identidad propia** — llave SSH y gitconfig dedicados; tus llaves personales no existen dentro
 - 🧪 **`yolo` seguro** — `--dangerously-skip-permissions` solo dentro del sandbox
 - 🌳 **Entornos con nombre** — logins/configs separados con `cbox @work`, `cbox @personal`
-- ⚡ **Rápido** — arranque subsegundo con OrbStack; N sesiones en paralelo
+- ⚡ **Rápido** — binario Go único con `exec` directo al runtime; arranque subsegundo con OrbStack
+- 📦 **Autocontenido** — el contexto de build va embebido en el binario y la imagen se etiqueta
+  por hash de contenido: una imagen obsoleta no puede reutilizarse jamás
+- 🖥️ **Feedback de verdad** — panel de sesión al arrancar, build con progreso, `doctor` con
+  diagnóstico completo y test del firewall en vivo
 
 ## 🚀 Instalación
 
@@ -37,20 +42,22 @@ directorio del proyecto.
 curl -fsSL https://raw.githubusercontent.com/ngavilan-dogfy/claudebox/main/install.sh | bash
 ```
 
+Descarga el binario de tu plataforma desde GitHub Releases (o compila desde
+fuente si tienes Go). Re-ejecútalo para actualizar.
+
 <details>
-<summary>O en dos pasos, si prefieres leer antes de ejecutar (👏)</summary>
+<summary>O manualmente, si prefieres leer antes de ejecutar (👏)</summary>
 
 ```bash
 git clone https://github.com/ngavilan-dogfy/claudebox ~/claudebox
-~/claudebox/install.sh
+cd ~/claudebox && go build -o ~/.local/bin/cbox . && cbox build
 ```
 </details>
 
 Requisitos: un runtime de contenedores ([OrbStack](https://orbstack.dev)
 recomendado en macOS, Docker o Podman en Linux, Docker Desktop en WSL2).
-El instalador es **idempotente**: re-ejecútalo tras un `git pull` para
-actualizar. En Linux ajusta el UID del contenedor al tuyo para que los
-permisos de los bind mounts no se rompan.
+En Linux, `cbox` ajusta el UID del contenedor al tuyo automáticamente para
+que los permisos de los bind mounts no se rompan.
 
 Verifica todo con:
 
