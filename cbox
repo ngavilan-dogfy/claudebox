@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+# cbox — Claude Code in a throwaway Docker sandbox.
+#
+#   cbox [@env] [args...]       interactive claude in the current dir
+#   cbox [@env] yolo [args...]  --dangerously-skip-permissions (net still filtered)
+#   cbox [@env] shell           bash inside the sandbox
+#   cbox [@env] login           run only the login flow for that env
+#   cbox ps                     list running cbox sessions
+#   cbox envs                   list environments (config volumes)
+#   cbox doctor                 check the whole setup
+#   cbox build | update         (re)build the image (update pulls latest)
+#
+# @env gives each environment its own auth/config volume (claude-box-config-<env>).
+# Per-machine overrides via env vars, per-project via a .cbox.conf file (sourced).
+set -euo pipefail
+
+DOCKER="${CBOX_RUNTIME:-docker}"
+IMAGE="${CBOX_IMAGE:-claude-box}"
+OS="$(uname -s)"
+self="$0"; [[ -L $self ]] && self="$(readlink "$self")"
+[[ $self != /* ]] && self="$(cd "$(dirname "$0")" && cd "$(dirname "$self")" && pwd)/$(basename "$self")"
+CBOX_SRC_DIR="$(cd "$(dirname "$self")" && pwd)"
+
+# ---- environment selector (@name) -------------------------------------------
+CBOX_ENV="${CBOX_ENV:-}"
+if [[ ${1:-} == @* ]]; then CBOX_ENV="${1#@}"; shift; fi
+
+# ---- defaults ----------------------------------------------------------------
+CBOX_NET="${CBOX_NET:-open}"                      # open | allowlist | full
+CBOX_SSH="${CBOX_SSH:-key}"                       # key | agent | none
+CBOX_KEY="${CBOX_KEY:-$HOME/.ssh/claude_agent}"
+CBOX_GITCONFIG="${CBOX_GITCONFIG:-$HOME/.config/cbox/gitconfig}"
+CBOX_MEMORY="${CBOX_MEMORY:-8g}"                  # cap, not a reservation
+CBOX_CPUS="${CBOX_CPUS:-}"
+CBOX_PIDS="${CBOX_PIDS:-2000}"
+CBOX_PORTS="${CBOX_PORTS:-}"                      # space-separated, e.g. "3000 5173"
+CBOX_MOUNTS="${CBOX_MOUNTS:-}"                    # space-separated src:dst[:ro]
+CBOX_ALLOWED_DOMAINS="${CBOX_ALLOWED_DOMAINS:-}"  # for CBOX_NET=allowlist
+
+[[ -f .cbox.conf ]] && source .cbox.conf
+
+CBOX_CONFIG_VOLUME="${CBOX_CONFIG_VOLUME:-claude-box-config${CBOX_ENV:+-$CBOX_ENV}}"
+
+build_image() {
+  local extra=()
+  [[ ${1:-} == --pull ]] && extra+=( --pull )
+  if [[ $OS == Linux ]]; then
+    extra+=( --build-arg USER_UID="$(id -u)" --build-arg USER_GID="$(id -g)" )
+  fi
+  # ${arr[@]+...} keeps empty-array expansion safe under macOS bash 3.2 + set -u
+  "$DOCKER" build ${extra[@]+"${extra[@]}"} -t "$IMAGE" "$CBOX_SRC_DIR"
+}
+
+agent_sock() {
+  # Docker Desktop & OrbStack expose the host agent at a fixed VM path;
+  # native Linux can mount the real socket directly.
+  if [[ $OS == Darwin ]]; then echo /run/host-services/ssh-auth.sock
+  else echo "${SSH_AUTH_SOCK:-}"; fi
+}
+
+cmd="${1:-}"
+case "$cmd" in
+  build)  build_image; exit ;;
+  update) build_image --pull; exit ;;
+  ps)
+    exec "$DOCKER" ps --filter label=cbox \
+      --format 'table {{.Names}}\t{{.Label "cbox.env"}}\t{{.RunningFor}}\t{{.Status}}' ;;
+  envs)
+    exec "$DOCKER" volume ls --filter name=claude-box-config --format '{{.Name}}' ;;
+  doctor)
+    fail=0
+    ok()   { printf '  \033[32mOK\033[0m  %s\n' "$1"; }
+    warn() { printf '  \033[33m!!\033[0m  %s\n' "$1"; }
+    bad()  { printf '  \033[31mXX\033[0m  %s\n' "$1"; fail=1; }
+    echo "cbox doctor — $OS"
+    command -v "$DOCKER" >/dev/null && ok "runtime: $DOCKER $("$DOCKER" version --format '{{.Client.Version}}' 2>/dev/null)" \
+                                    || bad "container runtime '$DOCKER' not found"
+    "$DOCKER" info >/dev/null 2>&1 && ok "daemon running" || bad "daemon not running (start Docker/OrbStack)"
+    "$DOCKER" image inspect "$IMAGE" >/dev/null 2>&1 && ok "image '$IMAGE' built" || warn "image missing — will build on first run"
+    command -v cbox >/dev/null && ok "cbox in PATH ($(command -v cbox))" || warn "cbox not in PATH"
+    [[ -f $CBOX_KEY ]] && ok "agent SSH key: $CBOX_KEY" \
+                       || warn "no dedicated key ($CBOX_KEY) — create: ssh-keygen -t ed25519 -f $CBOX_KEY"
+    [[ -f $CBOX_GITCONFIG ]] && ok "agent gitconfig: $CBOX_GITCONFIG" || warn "no agent gitconfig ($CBOX_GITCONFIG)"
+    sock="$(agent_sock)"
+    [[ -n $sock ]] && ok "ssh-agent socket for CBOX_SSH=agent: $sock" || warn "no ssh-agent socket (CBOX_SSH=agent unavailable)"
+    if "$DOCKER" image inspect "$IMAGE" >/dev/null 2>&1; then
+      if "$DOCKER" run --rm -v "$CBOX_CONFIG_VOLUME":/home/node/.claude "$IMAGE" \
+           bash -c 'test -s /home/node/.claude/.credentials.json' 2>/dev/null; then
+        ok "env '${CBOX_ENV:-default}' logged in"
+      else
+        warn "env '${CBOX_ENV:-default}' not logged in yet — run: cbox${CBOX_ENV:+ @$CBOX_ENV} login"
+      fi
+      if "$DOCKER" run --rm --cap-drop=ALL --cap-add=NET_ADMIN --cap-add=NET_RAW \
+           --cap-add=SETUID --cap-add=SETGID --cap-add=AUDIT_WRITE \
+           -e CBOX_FIREWALL=1 -e CBOX_NET=open "$IMAGE" \
+           bash -c 'curl -s --max-time 3 -o /dev/null http://host.docker.internal' 2>/dev/null; then
+        bad "firewall: host reachable from container"
+      else
+        ok "firewall: host unreachable, as intended"
+      fi
+    fi
+    exit "$fail" ;;
+  help|-h|--help)
+    sed -n '2,14p' "$self"; exit 0 ;;
+esac
+
+"$DOCKER" image inspect "$IMAGE" >/dev/null 2>&1 || build_image
+
+project="$(basename "$PWD" | tr -cd '[:alnum:]_.-')"
+args=( run --rm -it --init
+  --name "cbox-${project}-$$-$RANDOM"
+  --hostname "cbox-${project}"
+  --label cbox --label "cbox.env=${CBOX_ENV:-default}"
+  --security-opt no-new-privileges
+  --memory "$CBOX_MEMORY" --memory-swap "$CBOX_MEMORY" --pids-limit "$CBOX_PIDS"
+  -e TERM="${TERM:-xterm-256color}" -e COLORTERM="${COLORTERM:-truecolor}"
+  -v "$PWD":/work
+  -v "$CBOX_CONFIG_VOLUME":/home/node/.claude
+)
+[[ -n $CBOX_CPUS ]] && args+=( --cpus "$CBOX_CPUS" )
+
+# ---- profile -----------------------------------------------------------------
+inner=( claude )
+case "$cmd" in
+  yolo)  shift; inner=( claude --dangerously-skip-permissions "$@" ) ;;
+  shell) shift; inner=( bash "$@" ) ;;
+  login) inner=( claude /login ) ;;
+  *)     inner=( claude "$@" ) ;;
+esac
+
+# ---- network -----------------------------------------------------------------
+if [[ $CBOX_NET != full ]]; then
+  # NET_ADMIN/NET_RAW for iptables; SETUID/SETGID/AUDIT_WRITE so sudo can run
+  # the firewall script (NOPASSWD restricted to that single path).
+  args+=( --cap-drop=ALL --cap-add=NET_ADMIN --cap-add=NET_RAW
+          --cap-add=SETUID --cap-add=SETGID --cap-add=AUDIT_WRITE
+          -e CBOX_FIREWALL=1 -e CBOX_NET )
+  [[ -n $CBOX_ALLOWED_DOMAINS ]] && args+=( -e CBOX_ALLOWED_DOMAINS )
+else
+  args+=( --cap-drop=ALL )
+fi
+
+# ---- ssh ---------------------------------------------------------------------
+case "$CBOX_SSH" in
+  key)
+    if [[ -f $CBOX_KEY ]]; then
+      args+=( -v "$CBOX_KEY":/home/node/.ssh/id_ed25519:ro )
+      [[ -f $CBOX_KEY.pub ]] && args+=( -v "$CBOX_KEY.pub":/home/node/.ssh/id_ed25519.pub:ro )
+    fi
+    ;;
+  agent)
+    # The private key never enters the container; pair with ssh-add -c or
+    # Secretive so every signature is confirmed on the host. Note the whole
+    # agent is exposed — use a dedicated agent holding only the cbox key.
+    sock="$(agent_sock)"
+    if [[ -n $sock ]]; then
+      args+=( -v "$sock":/ssh-agent.sock -e SSH_AUTH_SOCK=/ssh-agent.sock )
+    else
+      echo "cbox: CBOX_SSH=agent but no agent socket available, continuing without ssh" >&2
+    fi
+    ;;
+esac
+[[ -f $HOME/.ssh/known_hosts ]] && args+=( -v "$HOME/.ssh/known_hosts":/home/node/.ssh/known_hosts:ro )
+
+# ---- identity & extras ---------------------------------------------------------
+[[ -f $CBOX_GITCONFIG ]] && args+=( -v "$CBOX_GITCONFIG":/home/node/.gitconfig:ro )
+[[ -n ${CLAUDE_CODE_OAUTH_TOKEN:-} ]] && args+=( -e CLAUDE_CODE_OAUTH_TOKEN )
+
+for p in $CBOX_PORTS; do args+=( -p "127.0.0.1:${p}:${p}" ); done
+for m in $CBOX_MOUNTS; do args+=( -v "$m" ); done
+
+exec "$DOCKER" "${args[@]}" "$IMAGE" "${inner[@]}"
