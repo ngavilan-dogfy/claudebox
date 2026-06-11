@@ -83,13 +83,26 @@ fuzzy tipo fzf en todas (`/`):
 enter shell into session · x stop · r refresh · / filter · tab switch · q quit
 ```
 
-- **Sessions** — gestionadas (●/○ attached/detached) y directas. `enter`
-  se attachea (o abre shell en las no gestionadas), `n` nueva, `x` cierra
-  con confirmación, `r` refresca.
-- **Projects** — historial de proyectos recientes; `enter` arranca una
-  sesión gestionada ahí (respeta el `.cbox.conf` del proyecto).
-- **Envs** — entornos con su cuenta; `enter` arranca sesión en el directorio
-  actual con ese entorno.
+- **Sessions** — gestionadas (●/○ attached/detached) y directas, con
+  **preview en vivo**: el panel derecho muestra la pantalla real del claude
+  de la sesión seleccionada, refrescada cada 500 ms — ves qué está haciendo
+  cada uno antes de entrar. `enter` se attachea, `n` nueva, `x` cierra con
+  confirmación, `r` refresca.
+- **Projects** — historial de proyectos recientes con **preview git**
+  (rama, ficheros modificados, últimos commits); `enter` arranca una sesión
+  gestionada ahí.
+- **Envs** — entornos con su cuenta; `enter` arranca sesión aquí con ese env.
+
+### Navegar entre sesiones sin salir de ninguna
+
+cbox instala automáticamente estos atajos en tmux (al crear/attachear):
+
+| Atajo | Acción |
+|---|---|
+| `Ctrl+b` `Tab` | dashboard en **popup flotante** sobre tu sesión — eliges y saltas |
+| `Ctrl+b` `Ctrl+n` | siguiente sesión cbox |
+| `Ctrl+b` `Ctrl+p` | sesión cbox anterior |
+| `Ctrl+b` `d` | detach (la sesión sigue trabajando) |
 
 Navegación: `tab`/`shift+tab` o `1`/`2`/`3` entre pestañas, `↑↓`/`jk` en las
 listas, `/` filtra, `q` sale.

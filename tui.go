@@ -2,8 +2,11 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
@@ -64,6 +67,12 @@ func (i envItem) FilterValue() string { return i.name }
 type accountMsg string
 type envEmailMsg struct{ vol, email string }
 type sessionsReloadedMsg []list.Item
+type tickMsg time.Time
+type previewMsg struct{ key, content string }
+
+func tickCmd() tea.Cmd {
+	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
+}
 
 // ---- model -----------------------------------------------------------------------
 
@@ -77,6 +86,73 @@ type uiModel struct {
 	pending string // container name awaiting stop confirmation
 	status  string
 	action  *uiAction
+	preview string
+}
+
+// previewKey identifies the current selection, so stale async previews can
+// be discarded.
+func (m uiModel) previewKey() string {
+	switch m.active {
+	case tabSessions:
+		if it, ok := m.lists[tabSessions].SelectedItem().(sessionItem); ok {
+			return "s:" + it.kind + ":" + it.id
+		}
+	case tabProjects:
+		if it, ok := m.lists[tabProjects].SelectedItem().(projectItem); ok {
+			return "p:" + it.path
+		}
+	}
+	return ""
+}
+
+func (m uiModel) loadPreviewCmd() tea.Cmd {
+	key := m.previewKey()
+	if key == "" {
+		return nil
+	}
+	height := m.height - 11
+	return func() tea.Msg {
+		var content string
+		switch {
+		case strings.HasPrefix(key, "s:managed:"):
+			name := strings.TrimPrefix(key, "s:managed:")
+			// capture-pane takes pane targets and rejects the "=" exact-match
+			// session prefix; full names are unique enough here.
+			out, err := exec.Command("tmux", "capture-pane", "-p", "-t", name).Output()
+			if err != nil {
+				content = "(no screen yet)"
+			} else {
+				content = lastNonEmptyLines(string(out), height)
+			}
+		case strings.HasPrefix(key, "s:container:"):
+			content = "unmanaged direct run — it lives in the terminal that started it.\nenter opens a shell inside the container."
+		case strings.HasPrefix(key, "p:"):
+			path := strings.TrimPrefix(key, "p:")
+			content = gitSummary(path, height)
+		}
+		return previewMsg{key: key, content: content}
+	}
+}
+
+func lastNonEmptyLines(s string, n int) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if n > 0 && len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func gitSummary(path string, height int) string {
+	branch, err := exec.Command("git", "-C", path, "status", "--short", "--branch").Output()
+	if err != nil {
+		return "not a git repository"
+	}
+	log, _ := exec.Command("git", "-C", path, "log", "--oneline", "-8").Output()
+	out := strings.TrimSpace(string(branch)) + "\n\nrecent commits:\n" + strings.TrimSpace(string(log))
+	return lastNonEmptyLines(out, 0)
 }
 
 func newDelegate() list.DefaultDelegate {
@@ -114,7 +190,7 @@ func runTUI(cfg *Config) (*uiAction, error) {
 }
 
 func (m uiModel) Init() tea.Cmd {
-	cmds := []tea.Cmd{loadAccountCmd(m.cfg)}
+	cmds := []tea.Cmd{loadAccountCmd(m.cfg), tickCmd()}
 	for _, it := range m.lists[tabEnvs].Items() {
 		if e, ok := it.(envItem); ok {
 			cmds = append(cmds, loadEnvEmailCmd(m.cfg, e.vol))
@@ -123,12 +199,29 @@ func (m uiModel) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+func (m *uiModel) resize() {
+	listW := m.width - 4
+	if m.active == tabSessions || m.active == tabProjects {
+		listW = m.width * 2 / 5 // left column; preview pane takes the rest
+	}
+	for i := range m.lists {
+		m.lists[i].SetSize(listW, m.height-7)
+	}
+}
+
 func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		for i := range m.lists {
-			m.lists[i].SetSize(msg.Width-4, msg.Height-7)
+		m.resize()
+		return m, nil
+
+	case tickMsg:
+		return m, tea.Batch(tickCmd(), m.loadPreviewCmd())
+
+	case previewMsg:
+		if msg.key == m.previewKey() {
+			m.preview = msg.content
 		}
 		return m, nil
 
@@ -162,16 +255,19 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "tab", "right":
 			m.active = (m.active + 1) % 3
-			m.pending, m.status = "", ""
-			return m, nil
+			m.pending, m.status, m.preview = "", "", ""
+			m.resize()
+			return m, m.loadPreviewCmd()
 		case "shift+tab", "left":
 			m.active = (m.active + 2) % 3
-			m.pending, m.status = "", ""
-			return m, nil
+			m.pending, m.status, m.preview = "", "", ""
+			m.resize()
+			return m, m.loadPreviewCmd()
 		case "1", "2", "3":
 			m.active = int(msg.String()[0] - '1')
-			m.pending, m.status = "", ""
-			return m, nil
+			m.pending, m.status, m.preview = "", "", ""
+			m.resize()
+			return m, m.loadPreviewCmd()
 
 		case "r":
 			if m.active == tabSessions {
@@ -261,9 +357,39 @@ func (m uiModel) View() string {
 		footer = statusStyle.Render(m.status)
 	}
 
+	body := m.lists[m.active].View()
+	if m.active == tabSessions || m.active == tabProjects {
+		pw := m.width - m.width*2/5 - 7
+		ph := m.height - 9
+		if pw > 10 && ph > 3 {
+			title := map[int]string{tabSessions: "live screen", tabProjects: "git"}[m.active]
+			content := truncateLines(m.preview, pw-2, ph-1)
+			pane := lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).BorderForeground(subtle).
+				Width(pw).Height(ph).Padding(0, 1).
+				Render(titleStyle.Render(title) + "\n" + content)
+			body = lipgloss.JoinHorizontal(lipgloss.Top, body, " ", pane)
+		}
+	}
+
 	return frameStyle.Render(
-		header + "\n" + tabBar + "\n\n" + m.lists[m.active].View() + "\n" + footer,
+		header + "\n" + tabBar + "\n\n" + body + "\n" + footer,
 	)
+}
+
+// truncateLines hard-trims preview content so it can never overflow the pane.
+func truncateLines(s string, w, h int) string {
+	lines := strings.Split(s, "\n")
+	if len(lines) > h {
+		lines = lines[len(lines)-h:]
+	}
+	for i, l := range lines {
+		if utf8.RuneCountInString(l) > w {
+			r := []rune(l)
+			lines[i] = string(r[:w])
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // ---- data loading -----------------------------------------------------------------

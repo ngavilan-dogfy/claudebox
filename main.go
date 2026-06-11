@@ -72,6 +72,10 @@ func main() {
 		usage()
 	case "ui", "tui":
 		err = dashboard(cfg)
+	case "_cycle":
+		if len(args) >= 4 {
+			err = cycleSession(args[1], args[2], args[3])
+		}
 	case "yolo":
 		err = session(cfg, "yolo", args[1:])
 	case "shell":

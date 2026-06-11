@@ -55,9 +55,55 @@ func tmuxHas(name string) bool {
 	return exec.Command("tmux", "has-session", "-t", "="+name).Run() == nil
 }
 
+// ensureTmuxBindings installs cbox's navigation keys on the tmux server
+// (idempotent; lives for the server's lifetime):
+//
+//	prefix+Tab     dashboard as a floating popup over the current session
+//	prefix+Ctrl-n  next cbox session
+//	prefix+Ctrl-p  previous cbox session
+func ensureTmuxBindings() {
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	exec.Command("tmux", "bind-key", "Tab",
+		"display-popup", "-E", "-w", "85%", "-h", "75%", exe+" ui").Run()
+	exec.Command("tmux", "bind-key", "C-n", "run-shell",
+		fmt.Sprintf("%q _cycle next '#{client_tty}' '#{session_name}'", exe)).Run()
+	exec.Command("tmux", "bind-key", "C-p", "run-shell",
+		fmt.Sprintf("%q _cycle prev '#{client_tty}' '#{session_name}'", exe)).Run()
+}
+
+// cycleSession jumps the given client to the next/prev cbox session.
+func cycleSession(dir, clientTTY, current string) error {
+	ss := tmuxSessions()
+	if len(ss) == 0 {
+		return nil
+	}
+	idx := -1
+	for i, s := range ss {
+		if s.Name == current {
+			idx = i
+		}
+	}
+	target := ss[0].Name
+	switch {
+	case idx >= 0 && dir == "next":
+		target = ss[(idx+1)%len(ss)].Name
+	case idx >= 0 && dir == "prev":
+		target = ss[(idx+len(ss)-1)%len(ss)].Name
+	}
+	args := []string{"switch-client", "-t", "=" + target}
+	if clientTTY != "" {
+		args = append(args, "-c", clientTTY)
+	}
+	return exec.Command("tmux", args...).Run()
+}
+
 // attachSession hands the terminal over to the tmux session — switch-client
 // when already inside tmux, otherwise exec replaces cbox with tmux.
 func attachSession(name string) error {
+	ensureTmuxBindings()
 	path, err := exec.LookPath("tmux")
 	if err != nil {
 		return err
@@ -119,9 +165,10 @@ func newSession(cfg *Config, custom string, extra []string) error {
 	if out, err := exec.Command("tmux", args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("tmux: %s", strings.TrimSpace(string(out)))
 	}
+	ensureTmuxBindings()
 	okLine("session %s started in %s", bold(sess), pwd)
 	fmt.Println(dim("   attach: cbox attach " + strings.TrimPrefix(sess, tmuxPrefix) +
-		" · detach inside: Ctrl+b d · list: cbox ls · close: cbox kill " + strings.TrimPrefix(sess, tmuxPrefix)))
+		" · inside: Ctrl+b d detach · Ctrl+b Tab dashboard · Ctrl+b C-n/C-p next/prev"))
 	if isTTY(os.Stdin) && isTTY(os.Stdout) {
 		return attachSession(sess)
 	}
