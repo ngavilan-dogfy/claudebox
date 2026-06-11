@@ -1,128 +1,162 @@
-# claudebox
+<div align="center">
 
-Claude Code en un sandbox Docker desechable, con un solo comando: `cbox`.
-Internet sí; tu máquina y tu LAN, nunca.
+# 📦 claudebox
 
-## Instalación
+**Claude Code en un sandbox Docker desechable. Un comando: `cbox`.**
+
+*Internet sí. Tu máquina y tu LAN, nunca.*
+
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20WSL2-blue)
+![Runtime](https://img.shields.io/badge/runtime-Docker%20%7C%20Podman%20%7C%20OrbStack-2496ED?logo=docker&logoColor=white)
+![Shell](https://img.shields.io/badge/bash-3.2%2B-4EAA25?logo=gnubash&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Claude Code](https://img.shields.io/badge/Claude%20Code-sandboxed-D97757?logo=anthropic&logoColor=white)
+
+</div>
+
+---
+
+## ✨ Por qué
+
+Claude Code corriendo con tu usuario ve **todo**: tus llaves SSH, tus tokens,
+tu LAN. `claudebox` lo mete en un contenedor efímero donde solo existen el
+repo actual y una identidad dedicada del agente — y aún así puede navegar
+internet para leer documentación. Si algo sale mal, el daño máximo es el
+directorio del proyecto.
+
+- 🗑️ **Efímero** — cada sesión es un contenedor nuevo, destruido al salir
+- 🔥 **Firewall de egress** — internet abierto, pero el host y los rangos privados bloqueados por iptables
+- 🔑 **Identidad propia** — llave SSH y gitconfig dedicados; tus llaves personales no existen dentro
+- 🧪 **`yolo` seguro** — `--dangerously-skip-permissions` solo dentro del sandbox
+- 🌳 **Entornos con nombre** — logins/configs separados con `cbox @work`, `cbox @personal`
+- ⚡ **Rápido** — arranque subsegundo con OrbStack; N sesiones en paralelo
+
+## 🚀 Instalación
 
 ```bash
-git clone <repo> ~/claudebox && ~/claudebox/install.sh
-cbox doctor    # verifica todo el setup
+curl -fsSL https://raw.githubusercontent.com/ngavilan-dogfy/claudebox/main/install.sh | bash
 ```
 
-Soportado: **macOS** (OrbStack recomendado, o Docker Desktop), **Linux**
-(Docker o Podman — el instalador ajusta el UID del contenedor al tuyo para
-que los permisos de los repos no se rompan), **Windows vía WSL2**. El
-instalador es idempotente: re-ejecútalo tras un `git pull` para actualizar.
+<details>
+<summary>O en dos pasos, si prefieres leer antes de ejecutar (👏)</summary>
 
-Runtime alternativo: `CBOX_RUNTIME=podman`.
+```bash
+git clone https://github.com/ngavilan-dogfy/claudebox ~/claudebox
+~/claudebox/install.sh
+```
+</details>
 
-## Uso diario
+Requisitos: un runtime de contenedores ([OrbStack](https://orbstack.dev)
+recomendado en macOS, Docker o Podman en Linux, Docker Desktop en WSL2).
+El instalador es **idempotente**: re-ejecútalo tras un `git pull` para
+actualizar. En Linux ajusta el UID del contenedor al tuyo para que los
+permisos de los bind mounts no se rompan.
+
+Verifica todo con:
+
+```bash
+cbox doctor
+```
+
+## 🕹️ Uso
 
 ```bash
 cd ~/mi-proyecto
 cbox                        # claude interactivo, sandboxed
 cbox yolo                   # sin prompts de permisos (la red sigue filtrada)
-cbox -p "arregla los tests" # one-shot; args pasan directos a claude
-cbox shell                  # bash dentro, para depurar
-cbox ps                     # sesiones cbox corriendo ahora mismo
-cbox envs                   # entornos existentes
-cbox doctor                 # chequeo completo del setup
-cbox update                 # actualiza claude + imagen base
+cbox -p "arregla los tests" # one-shot; los args pasan directos a claude
 ```
 
-**Varias sesiones a la vez:** sin límite — cada invocación es un contenedor
-efímero con nombre único. Abre N terminales, N proyectos, N `cbox`.
+| Comando | Qué hace |
+|---|---|
+| `cbox [@env] [args...]` | Claude interactivo en el directorio actual |
+| `cbox [@env] yolo [args...]` | `--dangerously-skip-permissions`, red aún filtrada |
+| `cbox [@env] shell` | bash dentro del sandbox |
+| `cbox [@env] login` | solo el flujo de login de ese entorno |
+| `cbox ps` | sesiones corriendo ahora mismo |
+| `cbox envs` | entornos existentes |
+| `cbox doctor` | chequeo completo (incluye test en vivo del firewall) |
+| `cbox build` / `update` | (re)construir la imagen / actualizar claude |
 
-## Entornos dedicados: `@nombre`
+**Sesiones concurrentes:** sin límite. Cada invocación es un contenedor con
+nombre único; abre N terminales y proyectos a la vez.
 
-Cada entorno tiene su propio volumen de config (login, historial, settings):
+## 🌐 Red
 
-```bash
-cbox @work          # usa el volumen claude-box-config-work
-cbox @personal yolo
-cbox @work login    # login solo para ese entorno
-```
-
-Sin `@`, usa el entorno default (`claude-box-config`). También se puede fijar
-por proyecto con `CBOX_ENV=work` en `.cbox.conf`.
-
-## Login
-
-Primera vez por entorno: `cbox login` (o simplemente `cbox` — lo pedirá).
-Dentro del contenedor no hay navegador, así que Claude muestra una **URL para
-abrir en tu navegador del host** y te pide **pegar el código** de vuelta. Ese
-flujo funciona siempre en contenedores; el de redirect automático no (el
-callback apunta al localhost del contenedor).
-
-Si algún día el flujo de pegar código fallara, plan B garantizado:
-
-```bash
-claude setup-token            # en el host, genera token de larga duración
-export CLAUDE_CODE_OAUTH_TOKEN=...   # cbox lo pasa al contenedor automáticamente
-```
-
-El login queda persistido en el volumen del entorno — una vez y listo.
-
-## Red (CBOX_NET)
-
-| Modo | Internet | Host + LAN | Uso |
+| `CBOX_NET` | Internet | Host + LAN | Para qué |
 |---|---|---|---|
-| `open` (default) | ✅ todo (docs, webs, APIs) | ❌ bloqueado por iptables | día a día y yolo |
-| `allowlist` | solo `CBOX_ALLOWED_DOMAINS` | ❌ | paranoia / desatendido largo |
-| `full` | ✅ | ✅ | solo si necesitas un servicio local |
+| `open` *(default)* | ✅ todo | ❌ bloqueado | día a día y `yolo` |
+| `allowlist` | solo `CBOX_ALLOWED_DOMAINS` | ❌ | desatendido / paranoia |
+| `full` | ✅ | ✅ | necesitas un servicio local |
 
-`open` bloquea `host.docker.internal`, todos los rangos privados
-(10/8, 172.16/12, 192.168/16), link-local, CGN y el rango de OrbStack. O sea:
-Claude puede leer documentación en internet pero no puede tocar tu Mac ni
-nada de tu red local. DNS queda abierto (necesario para resolver), así que
-esto frena acceso al host y exfiltración casual, no un túnel DNS dedicado.
+`open` bloquea `host.docker.internal`, 10/8, 172.16/12, 192.168/16,
+link-local, CGN y el rango de OrbStack: Claude lee toda la documentación que
+quiera en internet, pero no puede tocar tu máquina ni tu red.
 
-## Config por proyecto: `.cbox.conf`
+> ⚠️ **Límite honesto:** el DNS queda abierto (hace falta para resolver), así
+> que esto frena el acceso al host y la exfiltración casual — no un túnel DNS
+> dedicado.
+
+## 🔑 SSH e identidad
+
+| `CBOX_SSH` | Cómo funciona |
+|---|---|
+| `key` *(default)* | Monta `~/.ssh/claude_agent` **read-only**. Créala: `ssh-keygen -t ed25519 -f ~/.ssh/claude_agent` |
+| `agent` | Reenvía el socket del ssh-agent; la llave privada **nunca entra** al contenedor. Combínalo con `ssh-add -c` o [Secretive](https://github.com/maxgoedjen/secretive) para confirmar cada firma con Touch ID |
+| `none` | Sin SSH |
+
+La identidad git del agente vive en `~/.config/cbox/gitconfig` (el instalador
+crea una plantilla). Consejo: en GitHub usa *deploy keys* por repo o un
+*fine-grained PAT* — revocar al agente nunca debe costar rotar tu identidad.
+
+## ⚙️ Config por proyecto: `.cbox.conf`
+
+Fichero opcional en la raíz del repo (se hace `source`):
 
 ```bash
 CBOX_PORTS="3000 5173"                # dev servers publicados en 127.0.0.1
-CBOX_MOUNTS="$HOME/datasets:/data:ro"
+CBOX_MOUNTS="$HOME/datasets:/data:ro" # mounts extra
 CBOX_NET="allowlist"
 CBOX_ALLOWED_DOMAINS="api.anthropic.com,github.com,registry.npmjs.org"
-CBOX_MEMORY="12g"
-CBOX_SSH="agent"                      # key | agent | none
+CBOX_MEMORY="12g"                     # techo, no reserva
+CBOX_CPUS="4"
+CBOX_SSH="agent"
 CBOX_ENV="work"
 ```
 
-Ojo: si dos sesiones del mismo proyecto publican los mismos puertos, la
-segunda fallará por puerto ocupado — quita `CBOX_PORTS` en la segunda.
+## 🧭 Login
 
-## Recursos
+La primera vez por entorno, `cbox login` (o simplemente `cbox`). Dentro del
+contenedor no hay navegador: Claude muestra una **URL para abrir en el host**
+y pega el código de vuelta. El redirect automático del OAuth no puede
+funcionar en contenedor (el callback apunta al localhost del contenedor) — el
+flujo de pegar código sí, siempre. Queda persistido en el volumen del entorno.
 
-Los límites (`8g` RAM, 2000 pids, swap = RAM) son **techos, no reservas**:
-diez sesiones ociosas consumen casi nada; el límite solo actúa si un proceso
-se desboca. La imagen se comparte entre todas las sesiones (una sola copia en
-disco) y con OrbStack el arranque es <1s e I/O casi nativo. `CBOX_CPUS=4`
-si quieres acotar CPU también.
+Plan B: `claude setup-token` en el host y exporta `CLAUDE_CODE_OAUTH_TOKEN`
+(cbox lo pasa al contenedor automáticamente).
 
-## Terminal
-
-`TERM` y `COLORTERM` se pasan del host, locale UTF-8 en la imagen, TTY real:
-colores, resize y atajos funcionan como en local. El hostname del contenedor
-es `cbox-<proyecto>` para que sepas dónde estás si abres `cbox shell`.
-
-## SSH
-
-- `CBOX_SSH=key` (default): monta `~/.ssh/claude_agent` **read-only**
-  (`ssh-keygen -t ed25519 -f ~/.ssh/claude_agent`). Tu `~/.ssh` real no existe
-  dentro del contenedor.
-- `CBOX_SSH=agent`: reenvía el socket del ssh-agent (Docker Desktop/OrbStack);
-  la llave privada **nunca entra** al contenedor. Combínalo con `ssh-add -c` o
-  Secretive (Secure Enclave) para confirmar cada uso con Touch ID. Usa un
-  agent dedicado: expone todas las llaves cargadas en él.
-- Identidad git del agente: `~/.config/cbox/gitconfig` → `.gitconfig` si existe.
-
-## Garantías por perfil
+## 🛡️ Garantías
 
 | | `cbox` | `cbox yolo` |
 |---|---|---|
 | Filesystem del host | solo `$PWD` | solo `$PWD` |
+| Llaves/tokens personales | no existen dentro | no existen dentro |
 | Capabilities | solo las 5 del firewall | igual |
 | Permisos de Claude | prompts normales | sin prompts |
-| Red | internet sí, host/LAN no | igual (o `allowlist` si lo pides) |
+| Red | internet sí, host/LAN no | igual |
+| Recursos | techo 8 GB / 2000 pids / swap=RAM | igual |
+
+## 🩹 Troubleshooting
+
+- **Dos sesiones del mismo proyecto y puertos** — la segunda falla por puerto
+  ocupado; quita `CBOX_PORTS` en ella.
+- **TUI con caracteres rotos** — la imagen fija `LANG=C.UTF-8`; haz
+  `cbox update` si vienes de una versión antigua.
+- **Necesito tocar un servicio del host** — `CBOX_NET=full cbox`, sabiendo lo
+  que haces.
+- **¿Podman?** — `CBOX_RUNTIME=podman` (env o `.cbox.conf`).
+- Cualquier otra cosa: `cbox doctor` primero.
+
+## 📄 Licencia
+
+[MIT](LICENSE)

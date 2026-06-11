@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # claudebox installer — macOS, Linux, Windows via WSL2.
 #
-#   git clone <repo> ~/claudebox && ~/claudebox/install.sh
+#   curl -fsSL https://raw.githubusercontent.com/ngavilan-dogfy/claudebox/main/install.sh | bash
+#   # or: git clone https://github.com/ngavilan-dogfy/claudebox ~/claudebox && ~/claudebox/install.sh
 #
 # Idempotent: safe to re-run after a git pull.
 set -euo pipefail
+
+REPO_URL="${CBOX_REPO:-https://github.com/ngavilan-dogfy/claudebox}"
 
 ok()   { printf '  \033[32mOK\033[0m  %s\n' "$1"; }
 warn() { printf '  \033[33m!!\033[0m  %s\n' "$1"; }
@@ -12,6 +15,19 @@ die()  { printf '  \033[31mXX\033[0m  %s\n' "$1"; exit 1; }
 
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 OS="$(uname -s)"
+
+# Piped via curl? Bootstrap: clone (or update) the repo and re-exec from there.
+if [[ ! -f $SRC_DIR/Dockerfile || ! -f $SRC_DIR/cbox ]]; then
+  TARGET="${CBOX_HOME:-$HOME/claudebox}"
+  if [[ -d $TARGET/.git ]]; then
+    ok "updating existing clone at $TARGET"
+    git -C "$TARGET" pull --ff-only -q
+  else
+    ok "cloning $REPO_URL → $TARGET"
+    git clone -q "$REPO_URL" "$TARGET"
+  fi
+  exec bash "$TARGET/install.sh"
+fi
 
 case "$OS" in
   Darwin|Linux) ok "platform: $OS" ;;
