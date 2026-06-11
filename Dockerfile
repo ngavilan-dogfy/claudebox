@@ -2,7 +2,7 @@ FROM node:22-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git openssh-client ripgrep curl ca-certificates jq procps less \
-    iptables ipset dnsutils sudo \
+    iptables ipset dnsutils util-linux \
  && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g @anthropic-ai/claude-code
@@ -20,8 +20,6 @@ RUN if [ "$USER_UID" != "1000" ] || [ "$USER_GID" != "1000" ]; then \
 COPY init-firewall.sh /usr/local/bin/init-firewall.sh
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/entrypoint.sh \
- && echo "node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" > /etc/sudoers.d/node-firewall \
- && chmod 440 /etc/sudoers.d/node-firewall \
  && mkdir -p /home/node/.claude /home/node/.ssh \
  && chown -R node:node /home/node/.claude /home/node/.ssh \
  && chmod 700 /home/node/.ssh

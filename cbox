@@ -90,14 +90,18 @@ case "$cmd" in
       else
         warn "env '${CBOX_ENV:-default}' not logged in yet — run: cbox${CBOX_ENV:+ @$CBOX_ENV} login"
       fi
-      if "$DOCKER" run --rm --cap-drop=ALL --cap-add=NET_ADMIN --cap-add=NET_RAW \
-           --cap-add=SETUID --cap-add=SETGID --cap-add=AUDIT_WRITE \
+      # Mirror the exact flags a real session uses, no-new-privileges included
+      out=$("$DOCKER" run --rm --user root --security-opt no-new-privileges \
+           --cap-drop=ALL --cap-add=NET_ADMIN --cap-add=NET_RAW \
+           --cap-add=SETUID --cap-add=SETGID \
            -e CBOX_FIREWALL=1 -e CBOX_NET=open "$IMAGE" \
-           bash -c 'curl -s --max-time 3 -o /dev/null http://host.docker.internal' 2>/dev/null; then
-        bad "firewall: host reachable from container"
-      else
-        ok "firewall: host unreachable, as intended"
-      fi
+           bash -c 'id -un; curl -s --max-time 3 -o /dev/null http://host.docker.internal && echo HOST_OPEN || true' 2>/dev/null || echo RUN_FAILED)
+      case "$out" in
+        *RUN_FAILED*) bad "firewall: sandbox failed to start" ;;
+        *HOST_OPEN*)  bad "firewall: host reachable from container" ;;
+        *node*)       ok "firewall: host unreachable, runs as node" ;;
+        *)            bad "firewall: container did not drop to node user" ;;
+      esac
     fi
     exit "$fail" ;;
   help|-h|--help)
@@ -130,10 +134,12 @@ esac
 
 # ---- network -----------------------------------------------------------------
 if [[ $CBOX_NET != full ]]; then
-  # NET_ADMIN/NET_RAW for iptables; SETUID/SETGID/AUDIT_WRITE so sudo can run
-  # the firewall script (NOPASSWD restricted to that single path).
-  args+=( --cap-drop=ALL --cap-add=NET_ADMIN --cap-add=NET_RAW
-          --cap-add=SETUID --cap-add=SETGID --cap-add=AUDIT_WRITE
+  # Starts as root with only the caps for iptables (NET_ADMIN/NET_RAW) and
+  # for dropping to node afterwards (SETUID/SETGID via setpriv) — compatible
+  # with no-new-privileges, which blocks sudo-style privilege *raising*.
+  args+=( --user root
+          --cap-drop=ALL --cap-add=NET_ADMIN --cap-add=NET_RAW
+          --cap-add=SETUID --cap-add=SETGID
           -e CBOX_FIREWALL=1 -e CBOX_NET )
   [[ -n $CBOX_ALLOWED_DOMAINS ]] && args+=( -e CBOX_ALLOWED_DOMAINS )
 else

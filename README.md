@@ -141,7 +141,7 @@ Plan B: `claude setup-token` en el host y exporta `CLAUDE_CODE_OAUTH_TOKEN`
 |---|---|---|
 | Filesystem del host | solo `$PWD` | solo `$PWD` |
 | Llaves/tokens personales | no existen dentro | no existen dentro |
-| Capabilities | solo las 5 del firewall | igual |
+| Capabilities | solo las 4 del firewall, sin sudo en la imagen | igual |
 | Permisos de Claude | prompts normales | sin prompts |
 | Red | internet sí, host/LAN no | igual |
 | Recursos | techo 8 GB / 2000 pids / swap=RAM | igual |
