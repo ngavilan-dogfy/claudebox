@@ -28,7 +28,11 @@ func main() {
 	case "build":
 		err = buildImage(cfg, false, false)
 	case "update":
-		err = buildImage(cfg, true, true)
+		if err = buildImage(cfg, true, true); err == nil {
+			err = cleanup(cfg)
+		}
+	case "cleanup":
+		err = cleanup(cfg)
 	case "ps":
 		err = passthrough(cfg, "ps", "--filter", "label=cbox",
 			"--format", `table {{.Names}}\t{{.Label "cbox.env"}}\t{{.RunningFor}}\t{{.Status}}`)
@@ -66,6 +70,7 @@ func session(cfg *Config, profile string, extra []string) error {
 		}
 	}
 	ensureGitconfigTemplate(cfg)
+	maybeSeedEnv(cfg)
 
 	printHeader(cfg, profile)
 	return execRuntime(cfg, sessionArgs(cfg, innerCommand(profile, extra)))
@@ -156,6 +161,60 @@ func listEnvs(cfg *Config) error {
 	return nil
 }
 
+// cleanup removes sandbox images whose tag no longer matches the embedded
+// assets, plus any stopped cbox session containers, so nothing hangs around.
+func cleanup(cfg *Config) error {
+	current := cfg.ImageTag()
+	out, _ := run(cfg, "images", cfg.ImageBase, "--format", "{{.Repository}}:{{.Tag}}")
+	cleaned := false
+	for _, img := range strings.Split(out, "\n") {
+		if img == "" || img == current {
+			continue
+		}
+		if _, err := run(cfg, "rmi", img); err == nil {
+			okLine("removed stale image %s", img)
+		} else {
+			warnLine("%s still in use by a running session — exit it and re-run cbox cleanup", img)
+		}
+		cleaned = true
+	}
+	if out, _ := run(cfg, "ps", "-aq", "--filter", "label=cbox", "--filter", "status=exited"); out != "" {
+		ids := strings.Fields(out)
+		if _, err := run(cfg, append([]string{"rm"}, ids...)...); err == nil {
+			okLine("removed %d stopped session container(s)", len(ids))
+			cleaned = true
+		}
+	}
+	if !cleaned {
+		fmt.Println(dim("nothing to clean"))
+	}
+	return nil
+}
+
+// maybeSeedEnv copies the default env's login into a brand-new named env so
+// `cbox @foo` works first try; /login inside still switches accounts.
+func maybeSeedEnv(cfg *Config) {
+	const defVol = "claude-box-config"
+	if cfg.Volume() == defVol {
+		return
+	}
+	hasCreds := func(vol string) bool {
+		_, err := run(cfg, "run", "--rm", "-v", vol+":/v", cfg.ImageTag(),
+			"bash", "-c", "test -s /v/.credentials.json")
+		return err == nil
+	}
+	if hasCreds(cfg.Volume()) || !hasCreds(defVol) {
+		return
+	}
+	// Needs real root: fresh volumes mount root-owned, and our own
+	// entrypoint always drops root to node — bypass it for the copy.
+	if _, err := run(cfg, "run", "--rm", "--user", "root", "--entrypoint", "bash",
+		"-v", defVol+":/src:ro", "-v", cfg.Volume()+":/dst", cfg.ImageTag(),
+		"-c", "cp /src/.credentials.json /dst/ && (cp /src/.claude.json /dst/ 2>/dev/null || true) && chown -R node:node /dst"); err == nil {
+		okLine("env %q seeded with the default env login — /login inside to use another account", cfg.EnvName())
+	}
+}
+
 func ensureGitconfigTemplate(cfg *Config) {
 	if fileExists(cfg.GitConfig) {
 		return
@@ -189,7 +248,8 @@ func usage() {
 		"  cbox ps                      running sessions\n" +
 		"  cbox envs                    environments and their login state\n" +
 		"  cbox doctor                  check the whole setup\n" +
-		"  cbox build | update          (re)build the image (update pulls latest)\n" +
+		"  cbox build | update          (re)build the image (update pulls latest + cleanup)\n" +
+		"  cbox cleanup                 remove stale images and dead session containers\n" +
 		"  cbox version | help\n\n" +
 		bold("config") + dim("  (env vars, or a sourced-style .cbox.conf in the project root)\n") +
 		"  CBOX_NET=open|allowlist|full   CBOX_SSH=key|agent|none   CBOX_ENV=<name>\n" +

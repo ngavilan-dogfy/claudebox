@@ -42,8 +42,11 @@ directorio del proyecto.
 curl -fsSL https://raw.githubusercontent.com/ngavilan-dogfy/claudebox/main/install.sh | bash
 ```
 
-Descarga el binario de tu plataforma desde GitHub Releases (o compila desde
-fuente si tienes Go). Re-ejecútalo para actualizar.
+El instalador se encarga de **todo**: baja el binario de tu plataforma desde
+GitHub Releases (o compila desde fuente si tienes Go), añade `cbox` al PATH
+de tu shell, crea la llave SSH dedicada del agente si no existe, construye la
+imagen, barre imágenes obsoletas y termina con un `cbox doctor` completo.
+Re-ejecútalo para actualizar — es idempotente.
 
 <details>
 <summary>O manualmente, si prefieres leer antes de ejecutar (👏)</summary>
@@ -83,7 +86,8 @@ cbox -p "arregla los tests" # one-shot; los args pasan directos a claude
 | `cbox ps` | sesiones corriendo ahora mismo |
 | `cbox envs` | entornos existentes |
 | `cbox doctor` | chequeo completo (incluye test en vivo del firewall) |
-| `cbox build` / `update` | (re)construir la imagen / actualizar claude |
+| `cbox build` / `update` | (re)construir la imagen / actualizar claude (+ limpieza) |
+| `cbox cleanup` | borrar imágenes obsoletas y contenedores muertos |
 
 **Sesiones concurrentes:** sin límite. Cada invocación es un contenedor con
 nombre único; abre N terminales y proyectos a la vez.
@@ -133,11 +137,13 @@ CBOX_ENV="work"
 
 ## 🧭 Login
 
-La primera vez por entorno, `cbox login` (o simplemente `cbox`). Dentro del
-contenedor no hay navegador: Claude muestra una **URL para abrir en el host**
-y pega el código de vuelta. El redirect automático del OAuth no puede
-funcionar en contenedor (el callback apunta al localhost del contenedor) — el
-flujo de pegar código sí, siempre. Queda persistido en el volumen del entorno.
+**Una vez y listo.** La primera vez, `cbox login` (o simplemente `cbox`).
+Dentro del contenedor no hay navegador: Claude muestra una **URL para abrir
+en el host** y pega el código de vuelta. Todo el estado de sesión —incluido
+`.claude.json`, que normalmente vive fuera de `~/.claude`— se guarda en el
+volumen del entorno vía `CLAUDE_CONFIG_DIR`, así que persiste entre sesiones.
+Y los **entornos nuevos se siembran automáticamente** con el login del
+default (`/login` dentro si quieres otra cuenta).
 
 Plan B: `claude setup-token` en el host y exporta `CLAUDE_CODE_OAUTH_TOKEN`
 (cbox lo pasa al contenedor automáticamente).

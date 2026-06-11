@@ -114,6 +114,11 @@ func sessionArgs(cfg *Config, inner []string) []string {
 		"--pids-limit", cfg.Pids,
 		"-e", "TERM=" + envOr("TERM", "xterm-256color"),
 		"-e", "COLORTERM=" + envOr("COLORTERM", "truecolor"),
+		// Keep ALL claude state (including .claude.json, which normally sits
+		// at ~/.claude.json, outside ~/.claude) inside the mounted volume —
+		// otherwise OAuth/app state dies with the container and every
+		// session asks for login again.
+		"-e", "CLAUDE_CONFIG_DIR=/home/node/.claude",
 		"-v", pwd + ":/work",
 		"-v", cfg.Volume() + ":/home/node/.claude",
 	}
