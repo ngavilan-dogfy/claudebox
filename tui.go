@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,13 +37,15 @@ var (
 
 // ---- items --------------------------------------------------------------------
 
-type sessionItem struct{ name, env, uptime, status, image string }
-
-func (i sessionItem) Title() string { return i.name }
-func (i sessionItem) Description() string {
-	return fmt.Sprintf("env %s · up %s · %s", i.env, i.uptime, i.image)
+type sessionItem struct {
+	kind string // "managed" (tmux) | "container" (unmanaged direct run)
+	id   string // tmux session name or container name
+	t, d string
 }
-func (i sessionItem) FilterValue() string { return i.name + " " + i.env }
+
+func (i sessionItem) Title() string       { return i.t }
+func (i sessionItem) Description() string { return i.d }
+func (i sessionItem) FilterValue() string { return i.t + " " + i.d }
 
 type projectItem struct{ path string }
 
@@ -178,19 +179,26 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, reloadSessionsCmd(m.cfg)
 			}
 
+		case "n":
+			if m.active == tabSessions {
+				m.active = tabProjects
+				m.status = "pick a project and press enter to start a managed session there"
+				return m, nil
+			}
+
 		case "y":
 			if m.pending != "" {
-				name := m.pending
+				parts := strings.SplitN(m.pending, "\x00", 2)
 				m.pending = ""
-				m.status = "stopping " + name + "…"
-				return m, stopSessionCmd(m.cfg, name)
+				m.status = "closing " + parts[1] + "…"
+				return m, stopSessionCmd(m.cfg, parts[0], parts[1])
 			}
 
 		case "x":
 			if m.active == tabSessions {
 				if it, ok := m.lists[tabSessions].SelectedItem().(sessionItem); ok {
-					m.pending = it.name
-					m.status = "stop " + it.name + "? press y to confirm, any key to cancel"
+					m.pending = it.kind + "\x00" + it.id
+					m.status = "close " + it.t + "? press y to confirm, any key to cancel"
 					return m, nil
 				}
 			}
@@ -199,7 +207,11 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch m.active {
 			case tabSessions:
 				if it, ok := m.lists[tabSessions].SelectedItem().(sessionItem); ok {
-					m.action = &uiAction{kind: "shell", arg: it.name}
+					kind := "shell"
+					if it.kind == "managed" {
+						kind = "attach"
+					}
+					m.action = &uiAction{kind: kind, arg: it.id}
 					return m, tea.Quit
 				}
 			case tabProjects:
@@ -240,8 +252,8 @@ func (m uiModel) View() string {
 	tabBar := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
 
 	hints := map[int]string{
-		tabSessions: "enter shell into session · x stop · r refresh · / filter · tab switch · q quit",
-		tabProjects: "enter start claude there · / filter · tab switch · q quit",
+		tabSessions: "enter attach · n new · x close · r refresh · / filter · tab switch · q quit",
+		tabProjects: "enter start managed session there · / filter · tab switch · q quit",
 		tabEnvs:     "enter start session here with env · / filter · tab switch · q quit",
 	}[m.active]
 	footer := footerStyle.Render(hints)
@@ -257,21 +269,35 @@ func (m uiModel) View() string {
 // ---- data loading -----------------------------------------------------------------
 
 func loadSessionItems(cfg *Config) []list.Item {
-	out, err := run(cfg, "ps", "--filter", "label=cbox",
-		"--format", `{{.Names}}\t{{.Label "cbox.env"}}\t{{.RunningFor}}\t{{.Status}}\t{{.Image}}`)
 	items := []list.Item{}
-	if err != nil || out == "" {
-		return items
+
+	byCont := containersBySession(cfg)
+	for _, s := range tmuxSessions() {
+		state := "○ detached"
+		if s.Attached {
+			state = "● attached"
+		}
+		cont := "container starting…"
+		if up, ok := byCont[s.Name]; ok {
+			cont = "up " + up
+		}
+		items = append(items, sessionItem{
+			kind: "managed", id: s.Name, t: s.Short(),
+			d: state + " · " + s.Path + " · " + cont,
+		})
 	}
+
+	// Unmanaged direct runs (cbox launched without `new`) — still reachable.
+	out, _ := run(cfg, "ps", "--filter", "label=cbox",
+		"--format", `{{.Names}}\t{{.Label "cbox.env"}}\t{{.Label "cbox.session"}}\t{{.RunningFor}}`)
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Split(line, "\t")
-		if len(f) < 5 {
+		if len(f) < 4 || f[2] != "" {
 			continue
 		}
 		items = append(items, sessionItem{
-			name: f[0], env: f[1],
-			uptime: strings.TrimSuffix(f[2], " ago"),
-			status: f[3], image: f[4],
+			kind: "container", id: f[0], t: f[0],
+			d: "unmanaged · env " + f[1] + " · up " + strings.TrimSuffix(f[3], " ago") + " · enter opens a shell",
 		})
 	}
 	return items
@@ -329,9 +355,13 @@ func reloadSessionsCmd(cfg *Config) tea.Cmd {
 	return func() tea.Msg { return sessionsReloadedMsg(loadSessionItems(cfg)) }
 }
 
-func stopSessionCmd(cfg *Config, name string) tea.Cmd {
+func stopSessionCmd(cfg *Config, kind, id string) tea.Cmd {
 	return func() tea.Msg {
-		run(cfg, "stop", "-t", "3", name)
+		if kind == "managed" {
+			killSessionResources(cfg, id)
+		} else {
+			run(cfg, "stop", "-t", "3", id)
+		}
 		return sessionsReloadedMsg(loadSessionItems(cfg))
 	}
 }

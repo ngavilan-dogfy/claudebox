@@ -83,11 +83,11 @@ fuzzy tipo fzf en todas (`/`):
 enter shell into session · x stop · r refresh · / filter · tab switch · q quit
 ```
 
-- **Sessions** — tus sesiones vivas con contexto (env, uptime, imagen).
-  `enter` abre un shell **dentro** de la sesión, `x` la para (con confirmación),
-  `r` refresca.
-- **Projects** — historial de proyectos recientes; `enter` lanza claude ahí
-  directamente (respeta el `.cbox.conf` del proyecto).
+- **Sessions** — gestionadas (●/○ attached/detached) y directas. `enter`
+  se attachea (o abre shell en las no gestionadas), `n` nueva, `x` cierra
+  con confirmación, `r` refresca.
+- **Projects** — historial de proyectos recientes; `enter` arranca una
+  sesión gestionada ahí (respeta el `.cbox.conf` del proyecto).
 - **Envs** — entornos con su cuenta; `enter` arranca sesión en el directorio
   actual con ese entorno.
 
@@ -96,8 +96,26 @@ listas, `/` filtra, `q` sale.
 
 ## 🕹️ Uso
 
+### Sesiones gestionadas (lo god ✨)
+
+Sesiones con nombre que **sobreviven a cerrar la terminal**, respaldadas por
+tmux — creas, navegas, te attacheas desde cualquier sitio y cierras, todo
+desde la terminal:
+
 ```bash
 cd ~/mi-proyecto
+cbox new                 # sesión "sprout-game", se attachea ya
+cbox new feature-x       # segunda sesión del mismo proyecto, en paralelo
+# … Ctrl+b d para salir dejándola corriendo …
+cbox ls                  # ● attached / ○ detached + estado del contenedor
+cbox attach feat         # vuelve (fuzzy match; alias: cbox a feat)
+cbox kill feature-x      # cierra sesión + contenedor
+cbox kill --all
+```
+
+### Directo (efímero, ligado a la terminal)
+
+```bash
 cbox                        # claude interactivo, sandboxed
 cbox yolo                   # sin prompts de permisos (la red sigue filtrada)
 cbox -p "arregla los tests" # one-shot; los args pasan directos a claude

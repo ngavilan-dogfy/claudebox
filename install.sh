@@ -63,6 +63,16 @@ esac
 
 ok "$("$BIN_DIR/cbox" version)"
 
+# ---- tmux: powers managed sessions (cbox new/ls/attach/kill) ---------------------
+if command -v tmux >/dev/null; then
+  ok "tmux available — managed sessions enabled"
+elif [[ $OS == darwin ]] && command -v brew >/dev/null; then
+  brew install -q tmux && ok "installed tmux (managed sessions)" \
+    || warn "could not install tmux — managed sessions disabled until you: brew install tmux"
+else
+  warn "tmux missing — install it for managed sessions (debian/ubuntu: sudo apt install tmux)"
+fi
+
 # ---- dedicated agent SSH key (never your personal one) --------------------------
 KEY="$HOME/.ssh/claude_agent"
 if [[ ! -f $KEY ]]; then

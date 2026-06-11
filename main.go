@@ -33,9 +33,35 @@ func main() {
 		}
 	case "cleanup":
 		err = cleanup(cfg)
+	case "new", "n":
+		name := ""
+		var extra []string
+		if len(args) > 1 {
+			if !strings.HasPrefix(args[1], "-") {
+				name = args[1]
+				extra = args[2:]
+			} else {
+				extra = args[1:]
+			}
+		}
+		err = newSession(cfg, name, extra)
+	case "ls":
+		err = lsSessions(cfg)
+	case "attach", "a":
+		arg := ""
+		if len(args) > 1 {
+			arg = args[1]
+		}
+		err = attachCmd(cfg, arg)
+	case "kill":
+		arg := ""
+		if len(args) > 1 {
+			arg = args[1]
+		}
+		err = killCmd(cfg, arg)
 	case "ps":
 		err = passthrough(cfg, "ps", "--filter", "label=cbox",
-			"--format", `table {{.Names}}\t{{.Label "cbox.env"}}\t{{.RunningFor}}\t{{.Status}}`)
+			"--format", `table {{.Names}}\t{{.Label "cbox.env"}}\t{{.Label "cbox.session"}}\t{{.RunningFor}}\t{{.Status}}`)
 	case "envs":
 		err = listEnvs(cfg)
 	case "doctor":
@@ -73,6 +99,8 @@ func dashboard(cfg *Config) error {
 		return err
 	}
 	switch action.kind {
+	case "attach":
+		return attachSession(action.arg)
 	case "shell":
 		// New shell inside the live session container, as node (the
 		// container itself was started --user root for the firewall).
@@ -83,14 +111,23 @@ func dashboard(cfg *Config) error {
 		if err := os.Chdir(action.arg); err != nil {
 			return err
 		}
-		return session(loadConfig(), "run", nil) // reload: project .cbox.conf applies
+		return startPreferManaged(loadConfig()) // reload: project .cbox.conf applies
 	case "env-session":
 		if action.arg != "default" {
 			os.Setenv("CBOX_ENV", action.arg)
 		}
-		return session(loadConfig(), "run", nil)
+		return startPreferManaged(loadConfig())
 	}
 	return nil
+}
+
+// Managed (tmux) session when possible, plain direct run otherwise — the
+// dashboard must stay usable on machines without tmux.
+func startPreferManaged(cfg *Config) error {
+	if tmuxNeeded() == nil {
+		return newSession(cfg, "", nil)
+	}
+	return session(cfg, "run", nil)
 }
 
 func session(cfg *Config, profile string, extra []string) error {
@@ -278,7 +315,12 @@ func gitConfigValue(key, def string) string {
 
 func usage() {
 	fmt.Print(bold("cbox") + dim(" — Claude Code in a throwaway Docker sandbox\n\n") +
-		bold("usage\n") +
+		bold("managed sessions") + dim("  (survive closing the terminal; tmux-backed)\n") +
+		"  cbox new [name] [args...]    start + attach a named session here\n" +
+		"  cbox ls                      list sessions (attached/detached, container state)\n" +
+		"  cbox attach [name]           re-attach (fuzzy match; alias: a)\n" +
+		"  cbox kill <name|--all>       close session and its container\n\n" +
+		bold("direct\n") +
 		"  cbox [@env] [args...]        interactive claude in the current dir\n" +
 		"  cbox [@env] yolo [args...]   --dangerously-skip-permissions (net still filtered)\n" +
 		"  cbox [@env] shell [args...]  bash inside the sandbox\n" +

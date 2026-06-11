@@ -112,6 +112,7 @@ func sessionArgs(cfg *Config, inner []string) []string {
 		"--name", fmt.Sprintf("cbox-%s-%d-%04d", project, os.Getpid(), rand.Intn(10000)),
 		"--hostname", "cbox-" + project,
 		"--label", "cbox", "--label", "cbox.env=" + cfg.EnvName(),
+		"--label", "cbox.session=" + os.Getenv("CBOX_SESSION"),
 		"--security-opt", "no-new-privileges",
 		"--memory", cfg.Memory, "--memory-swap", cfg.Memory,
 		"--pids-limit", cfg.Pids,

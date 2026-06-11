@@ -47,6 +47,11 @@ func doctor(cfg *Config) int {
 	} else {
 		warnLine("no agent gitconfig (%s) — created automatically on first run", cfg.GitConfig)
 	}
+	if _, err := exec.LookPath("tmux"); err == nil {
+		okLine("tmux available — managed sessions (new/ls/attach/kill) enabled")
+	} else {
+		warnLine("tmux missing — managed sessions disabled (macOS: brew install tmux)")
+	}
 	if sock := agentSocket(); sock != "" {
 		okLine("ssh-agent socket for CBOX_SSH=agent: %s", sock)
 	} else {
