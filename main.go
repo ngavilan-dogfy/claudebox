@@ -143,13 +143,14 @@ func listEnvs(cfg *Config) error {
 		if name == "" {
 			name = "default"
 		}
-		status := dim("(login unknown — image missing)")
+		status := dim("(state unknown — image missing)")
 		if haveImage {
-			if _, err := run(cfg, "run", "--rm", "-v", vol+":/home/node/.claude",
-				cfg.ImageTag(), "bash", "-c", "test -s /home/node/.claude/.credentials.json"); err == nil {
-				status = green("logged in")
+			out, err := run(cfg, "run", "--rm", "-v", vol+":/v", cfg.ImageTag(),
+				"bash", "-c", "jq -r '.oauthAccount.emailAddress // empty' /v/.claude.json 2>/dev/null")
+			if err == nil && out != "" {
+				status = green(out)
 			} else {
-				status = yellow("not logged in")
+				status = yellow("no app state yet (created on first session)")
 			}
 		}
 		marker := "  "
@@ -191,27 +192,28 @@ func cleanup(cfg *Config) error {
 	return nil
 }
 
-// maybeSeedEnv copies the default env's login into a brand-new named env so
-// `cbox @foo` works first try; /login inside still switches accounts.
+// maybeSeedEnv copies the default env's app state (.claude.json: onboarding,
+// oauth account info) into a brand-new named env so `cbox @foo` works first
+// try. Credentials themselves are shared by all envs via the auth volume.
 func maybeSeedEnv(cfg *Config) {
 	const defVol = "claude-box-config"
 	if cfg.Volume() == defVol {
 		return
 	}
-	hasCreds := func(vol string) bool {
+	hasState := func(vol string) bool {
 		_, err := run(cfg, "run", "--rm", "-v", vol+":/v", cfg.ImageTag(),
-			"bash", "-c", "test -s /v/.credentials.json")
+			"bash", "-c", "test -s /v/.claude.json")
 		return err == nil
 	}
-	if hasCreds(cfg.Volume()) || !hasCreds(defVol) {
+	if hasState(cfg.Volume()) || !hasState(defVol) {
 		return
 	}
 	// Needs real root: fresh volumes mount root-owned, and our own
 	// entrypoint always drops root to node — bypass it for the copy.
 	if _, err := run(cfg, "run", "--rm", "--user", "root", "--entrypoint", "bash",
 		"-v", defVol+":/src:ro", "-v", cfg.Volume()+":/dst", cfg.ImageTag(),
-		"-c", "cp /src/.credentials.json /dst/ && (cp /src/.claude.json /dst/ 2>/dev/null || true) && chown -R node:node /dst"); err == nil {
-		okLine("env %q seeded with the default env login — /login inside to use another account", cfg.EnvName())
+		"-c", "cp /src/.claude.json /dst/ && chown -R node:node /dst"); err == nil {
+		okLine("env %q inherited app state from default (login is shared anyway)", cfg.EnvName())
 	}
 }
 

@@ -54,20 +54,25 @@ func doctor(cfg *Config) int {
 	}
 
 	if imageExists(cfg) {
-		if _, err := run(cfg, "run", "--rm",
-			"-v", cfg.Volume()+":/home/node/.claude", cfg.ImageTag(),
-			"bash", "-c", "test -s /home/node/.claude/.credentials.json"); err == nil {
-			okLine("env %q logged in", cfg.EnvName())
+		// Shared auth volume is the source of truth; a legacy regular file in
+		// the env volume counts too (it gets published+linked on next start).
+		out, err := run(cfg, "run", "--rm",
+			"-v", authVolume+":/claude-auth",
+			"-v", cfg.Volume()+":/cfgv", cfg.ImageTag(),
+			"bash", "-c",
+			"{ test -s /claude-auth/.credentials.json || { test -f /cfgv/.credentials.json && test ! -L /cfgv/.credentials.json; }; } "+
+				"&& jq -r '.oauthAccount.emailAddress // \"account unknown\"' /cfgv/.claude.json 2>/dev/null || true")
+		if err == nil && out != "" {
+			okLine("cbox login active: %s %s", out, dim("(shared by all envs, separate from your host claude)"))
 		} else {
-			warnLine("env %q not logged in yet — run: cbox%s login",
-				cfg.EnvName(), envSuffix(cfg))
+			warnLine("no cbox login yet — run: cbox%s login", envSuffix(cfg))
 		}
 
 		// Mirror the exact flags of a real session, no-new-privileges included.
-		out, err := run(cfg, "run", "--rm", "--user", "root",
+		out, err = run(cfg, "run", "--rm", "--user", "root",
 			"--security-opt", "no-new-privileges",
 			"--cap-drop=ALL", "--cap-add=NET_ADMIN", "--cap-add=NET_RAW",
-			"--cap-add=SETUID", "--cap-add=SETGID",
+			"--cap-add=SETUID", "--cap-add=SETGID", "--cap-add=CHOWN",
 			"-e", "CBOX_FIREWALL=1", "-e", "CBOX_NET=open", cfg.ImageTag(),
 			"bash", "-c", rootGuard, "cbox-guard",
 			"bash", "-c", "id -un; curl -s --max-time 3 -o /dev/null http://host.docker.internal && echo HOST_OPEN || true")

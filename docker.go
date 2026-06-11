@@ -14,6 +14,9 @@ import (
 	"time"
 )
 
+// authVolume holds the single login shared by all cbox sessions and envs.
+const authVolume = "claude-box-auth"
+
 const rootGuard = `if [ "$(id -u)" = 0 ]; then
   echo "cbox: still root after entrypoint — stale image. Run: cbox update" >&2
   exit 1
@@ -121,6 +124,9 @@ func sessionArgs(cfg *Config, inner []string) []string {
 		"-e", "CLAUDE_CONFIG_DIR=/home/node/.claude",
 		"-v", pwd + ":/work",
 		"-v", cfg.Volume() + ":/home/node/.claude",
+		// One login shared by every cbox env/session (and fully separate
+		// from the host's own claude): see sync_auth in entrypoint.sh.
+		"-v", authVolume + ":/claude-auth",
 	}
 	if isTTY(os.Stdin) && isTTY(os.Stdout) {
 		a = append(a, "-t")
@@ -135,7 +141,7 @@ func sessionArgs(cfg *Config, inner []string) []string {
 		// which blocks privilege *raising*, not lowering.
 		a = append(a, "--user", "root",
 			"--cap-drop=ALL", "--cap-add=NET_ADMIN", "--cap-add=NET_RAW",
-			"--cap-add=SETUID", "--cap-add=SETGID",
+			"--cap-add=SETUID", "--cap-add=SETGID", "--cap-add=CHOWN",
 			"-e", "CBOX_FIREWALL=1", "-e", "CBOX_NET="+cfg.Net)
 		if cfg.AllowedDomains != "" {
 			a = append(a, "-e", "CBOX_ALLOWED_DOMAINS="+cfg.AllowedDomains)
@@ -165,9 +171,8 @@ func sessionArgs(cfg *Config, inner []string) []string {
 	if fileExists(cfg.GitConfig) {
 		a = append(a, "-v", cfg.GitConfig+":/home/node/.gitconfig:ro")
 	}
-	if os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != "" {
-		a = append(a, "-e", "CLAUDE_CODE_OAUTH_TOKEN")
-	}
+	// Deliberately NOT forwarding CLAUDE_CODE_OAUTH_TOKEN: the host's claude
+	// identity must never leak into the sandbox; cbox has its own login.
 	for _, p := range cfg.Ports {
 		a = append(a, "-p", fmt.Sprintf("127.0.0.1:%s:%s", p, p))
 	}

@@ -75,6 +75,26 @@ else
   ok "dedicated agent SSH key exists: $KEY"
 fi
 
+# ---- global config: one place to tune everything --------------------------------
+CFG_FILE="$HOME/.config/cbox/config"
+if [[ ! -f $CFG_FILE ]]; then
+  mkdir -p "$(dirname "$CFG_FILE")"
+  cat > "$CFG_FILE" <<'EOF'
+# cbox global config — applies to every project; a project's .cbox.conf
+# overrides anything here. Uncomment what you want to change.
+
+# CBOX_NET="open"            # open (internet sí, host/LAN no) | allowlist | full
+# CBOX_SSH="key"             # key | agent | none
+# CBOX_MEMORY="8g"           # techo de RAM por sesión (no reserva)
+# CBOX_CPUS="4"              # techo de CPU
+# CBOX_RUNTIME="docker"      # docker | podman
+# CBOX_ALLOWED_DOMAINS="api.anthropic.com,github.com"   # para CBOX_NET=allowlist
+EOF
+  ok "created global config: $CFG_FILE — one place to tune everything"
+else
+  ok "global config exists: $CFG_FILE"
+fi
+
 # ---- image: build current, sweep stale ------------------------------------------
 RUNTIME="${CBOX_RUNTIME:-docker}"
 if command -v "$RUNTIME" >/dev/null && "$RUNTIME" info >/dev/null 2>&1; then

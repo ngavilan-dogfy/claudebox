@@ -53,6 +53,8 @@ func loadConfig() *Config {
 		ConfigVolume:   os.Getenv("CBOX_CONFIG_VOLUME"),
 		AllowHome:      os.Getenv("CBOX_ALLOW_HOME") == "1",
 	}
+	// Global machine config first, project .cbox.conf overrides it.
+	cfg.applyConfFile(filepath.Join(home, ".config", "cbox", "config"))
 	cfg.applyConfFile(".cbox.conf")
 	return cfg
 }

@@ -120,9 +120,12 @@ La identidad git del agente vive en `~/.config/cbox/gitconfig` (el instalador
 crea una plantilla). Consejo: en GitHub usa *deploy keys* por repo o un
 *fine-grained PAT* — revocar al agente nunca debe costar rotar tu identidad.
 
-## ⚙️ Config por proyecto: `.cbox.conf`
+## ⚙️ Config
 
-Fichero opcional en la raíz del repo (se hace `source`):
+Dos niveles, mismo formato `CBOX_*=valor`: **global** en
+`~/.config/cbox/config` (el instalador crea la plantilla comentada — tu
+lugar único para ajustarlo todo) y **por proyecto** en `.cbox.conf` en la
+raíz del repo, que pisa a la global:
 
 ```bash
 CBOX_PORTS="3000 5173"                # dev servers publicados en 127.0.0.1
@@ -137,13 +140,19 @@ CBOX_ENV="work"
 
 ## 🧭 Login
 
-**Una vez y listo.** La primera vez, `cbox login` (o simplemente `cbox`).
-Dentro del contenedor no hay navegador: Claude muestra una **URL para abrir
-en el host** y pega el código de vuelta. Todo el estado de sesión —incluido
-`.claude.json`, que normalmente vive fuera de `~/.claude`— se guarda en el
-volumen del entorno vía `CLAUDE_CONFIG_DIR`, así que persiste entre sesiones.
-Y los **entornos nuevos se siembran automáticamente** con el login del
-default (`/login` dentro si quieres otra cuenta).
+**Una vez, para todos los cbox — y separado de tu claude del host.** La
+identidad de cbox vive en un volumen de auth compartido (`claude-box-auth`)
+que todas las sesiones y entornos enlazan por symlink: te logueas una vez y
+cualquier proyecto y cualquier `@env` entra directo. Un `/login` o refresh de
+token dentro de una sesión se publica de vuelta al volumen compartido en el
+siguiente arranque (symlink auto-reparable). Tu `claude` del host usa su
+propio almacén y **nunca se mezcla** — cbox ni siquiera reenvía
+`CLAUDE_CODE_OAUTH_TOKEN` del host. `cbox doctor` y `cbox envs` te dicen con
+qué cuenta está logueado cbox.
+
+El flujo la primera vez: `cbox login` — Claude muestra una **URL para abrir
+en el navegador del host** y pegas el código de vuelta (el redirect
+automático no funciona en contenedor; este flujo sí, siempre).
 
 Plan B: `claude setup-token` en el host y exporta `CLAUDE_CODE_OAUTH_TOKEN`
 (cbox lo pasa al contenedor automáticamente).
@@ -154,7 +163,7 @@ Plan B: `claude setup-token` en el host y exporta `CLAUDE_CODE_OAUTH_TOKEN`
 |---|---|---|
 | Filesystem del host | solo `$PWD` | solo `$PWD` |
 | Llaves/tokens personales | no existen dentro | no existen dentro |
-| Capabilities | solo las 4 del firewall, sin sudo en la imagen | igual |
+| Capabilities | 5 mínimas (iptables + drop a node + chown del volumen de auth), sin sudo en la imagen | igual |
 | Permisos de Claude | prompts normales | sin prompts |
 | Red | internet sí, host/LAN no | igual |
 | Recursos | techo 8 GB / 2000 pids / swap=RAM | igual |
