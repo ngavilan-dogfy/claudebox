@@ -110,6 +110,17 @@ esac
 
 "$DOCKER" image inspect "$IMAGE" >/dev/null 2>&1 || build_image
 
+# Mounting your home (or an ancestor of it) hands the agent your real SSH
+# keys, tokens and config — the exact thing this sandbox exists to prevent.
+if [[ ${CBOX_ALLOW_HOME:-0} != 1 ]]; then
+  case "$HOME/" in
+    "$PWD"/*)
+      echo "cbox: refusing to run from $PWD — it contains your home directory." >&2
+      echo "cbox: cd into a project directory (or CBOX_ALLOW_HOME=1 if you really mean it)." >&2
+      exit 1 ;;
+  esac
+fi
+
 project="$(basename "$PWD" | tr -cd '[:alnum:]_.-')"
 args=( run --rm -it --init
   --name "cbox-${project}-$$-$RANDOM"
@@ -175,4 +186,13 @@ esac
 for p in $CBOX_PORTS; do args+=( -p "127.0.0.1:${p}:${p}" ); done
 for m in $CBOX_MOUNTS; do args+=( -v "$m" ); done
 
-exec "$DOCKER" "${args[@]}" "$IMAGE" "${inner[@]}"
+# Belt and braces: if the image's entrypoint failed to drop privileges
+# (e.g. a stale image from before the setpriv migration), refuse to start
+# rather than silently run the agent as root.
+guard='if [ "$(id -u)" = 0 ]; then
+  echo "cbox: still root after entrypoint — stale image. Run: cbox update" >&2
+  exit 1
+fi
+exec "$@"'
+
+exec "$DOCKER" "${args[@]}" "$IMAGE" bash -c "$guard" cbox-guard "${inner[@]}"

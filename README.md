@@ -148,6 +148,11 @@ Plan B: `claude setup-token` en el host y exporta `CLAUDE_CODE_OAUTH_TOKEN`
 
 ## 🩹 Troubleshooting
 
+- **"refusing to run from ... your home directory"** — `cbox` monta el
+  directorio actual dentro del sandbox; lanzarlo desde `$HOME` (o un ancestro)
+  le daría al agente tus llaves y tokens reales. Haz `cd` a un proyecto.
+- **"still root after entrypoint — stale image"** — tu imagen es anterior a la
+  migración a setpriv: `cbox update` y listo.
 - **Dos sesiones del mismo proyecto y puertos** — la segunda falla por puerto
   ocupado; quita `CBOX_PORTS` en ella.
 - **TUI con caracteres rotos** — la imagen fija `LANG=C.UTF-8`; haz
