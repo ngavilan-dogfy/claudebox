@@ -44,6 +44,8 @@ func main() {
 		fmt.Printf("cbox %s %s\n", version, dim("(image "+cfg.ImageTag()+")"))
 	case "help", "-h", "--help":
 		usage()
+	case "ui", "tui":
+		err = dashboard(cfg)
 	case "yolo":
 		err = session(cfg, "yolo", args[1:])
 	case "shell":
@@ -59,10 +61,44 @@ func main() {
 	}
 }
 
+// dashboard runs the interactive TUI and executes whatever the user picked.
+func dashboard(cfg *Config) error {
+	if !imageExists(cfg) {
+		if err := buildImage(cfg, false, false); err != nil {
+			return err
+		}
+	}
+	action, err := runTUI(cfg)
+	if err != nil || action == nil {
+		return err
+	}
+	switch action.kind {
+	case "shell":
+		// New shell inside the live session container, as node (the
+		// container itself was started --user root for the firewall).
+		return execRuntime(cfg, []string{"exec", "-it",
+			"-u", "node", "-e", "HOME=/home/node", "-w", "/work",
+			action.arg, "bash"})
+	case "project":
+		if err := os.Chdir(action.arg); err != nil {
+			return err
+		}
+		return session(loadConfig(), "run", nil) // reload: project .cbox.conf applies
+	case "env-session":
+		if action.arg != "default" {
+			os.Setenv("CBOX_ENV", action.arg)
+		}
+		return session(loadConfig(), "run", nil)
+	}
+	return nil
+}
+
 func session(cfg *Config, profile string, extra []string) error {
 	if err := guardHome(cfg); err != nil {
 		return err
 	}
+	pwd, _ := os.Getwd()
+	recordProject(pwd)
 	if !imageExists(cfg) {
 		fmt.Println(dim("first run for this image version — building the sandbox (cached afterwards)"))
 		if err := buildImage(cfg, false, false); err != nil {
@@ -247,6 +283,7 @@ func usage() {
 		"  cbox [@env] yolo [args...]   --dangerously-skip-permissions (net still filtered)\n" +
 		"  cbox [@env] shell [args...]  bash inside the sandbox\n" +
 		"  cbox [@env] login            login flow for that env\n" +
+		"  cbox ui                      interactive dashboard: sessions, projects, envs\n" +
 		"  cbox ps                      running sessions\n" +
 		"  cbox envs                    environments and their login state\n" +
 		"  cbox doctor                  check the whole setup\n" +

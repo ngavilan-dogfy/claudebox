@@ -9,7 +9,7 @@
 ![Release](https://img.shields.io/github/v/release/ngavilan-dogfy/claudebox?color=blueviolet)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20WSL2-blue)
 ![Runtime](https://img.shields.io/badge/runtime-Docker%20%7C%20Podman%20%7C%20OrbStack-2496ED?logo=docker&logoColor=white)
-![Go](https://img.shields.io/badge/Go-zero%20deps-00ADD8?logo=go&logoColor=white)
+![Go](https://img.shields.io/badge/Go-Bubble%20Tea%20TUI-00ADD8?logo=go&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Claude Code](https://img.shields.io/badge/Claude%20Code-sandboxed-D97757?logo=anthropic&logoColor=white)
 
@@ -68,6 +68,32 @@ Verifica todo con:
 cbox doctor
 ```
 
+## 🖥️ Dashboard TUI: `cbox ui`
+
+Centro de control interactivo (Bubble Tea) con tres pestañas y filtrado
+fuzzy tipo fzf en todas (`/`):
+
+```
+◆ claudebox  login: tu@cuenta.com · shared by all envs
+  1 Sessions    2 Projects    3 Envs
+
+│ cbox-sprout-game-7417
+│ env default · up 2 hours · claude-box:hf1c628a
+
+enter shell into session · x stop · r refresh · / filter · tab switch · q quit
+```
+
+- **Sessions** — tus sesiones vivas con contexto (env, uptime, imagen).
+  `enter` abre un shell **dentro** de la sesión, `x` la para (con confirmación),
+  `r` refresca.
+- **Projects** — historial de proyectos recientes; `enter` lanza claude ahí
+  directamente (respeta el `.cbox.conf` del proyecto).
+- **Envs** — entornos con su cuenta; `enter` arranca sesión en el directorio
+  actual con ese entorno.
+
+Navegación: `tab`/`shift+tab` o `1`/`2`/`3` entre pestañas, `↑↓`/`jk` en las
+listas, `/` filtra, `q` sale.
+
 ## 🕹️ Uso
 
 ```bash
@@ -83,6 +109,7 @@ cbox -p "arregla los tests" # one-shot; los args pasan directos a claude
 | `cbox [@env] yolo [args...]` | `--dangerously-skip-permissions`, red aún filtrada |
 | `cbox [@env] shell` | bash dentro del sandbox |
 | `cbox [@env] login` | solo el flujo de login de ese entorno |
+| `cbox ui` | dashboard interactivo: sesiones, proyectos, entornos |
 | `cbox ps` | sesiones corriendo ahora mismo |
 | `cbox envs` | entornos existentes |
 | `cbox doctor` | chequeo completo (incluye test en vivo del firewall) |
