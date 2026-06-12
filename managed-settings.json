@@ -1,0 +1,34 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -d /cbox-state ] && echo working > /cbox-state/state || true"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -d /cbox-state ] && echo ready > /cbox-state/state || true"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -d /cbox-state ] && echo attention > /cbox-state/state || true"
+          }
+        ]
+      }
+    ]
+  }
+}

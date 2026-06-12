@@ -6,6 +6,7 @@
 
 *Internet sí. Tu máquina y tu LAN, nunca.*
 
+![CI](https://github.com/ngavilan-dogfy/claudebox/actions/workflows/ci.yml/badge.svg)
 ![Release](https://img.shields.io/github/v/release/ngavilan-dogfy/claudebox?color=blueviolet)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20WSL2-blue)
 ![Runtime](https://img.shields.io/badge/runtime-Docker%20%7C%20Podman%20%7C%20OrbStack-2496ED?logo=docker&logoColor=white)
@@ -35,6 +36,11 @@ directorio del proyecto.
   por hash de contenido: una imagen obsoleta no puede reutilizarse jamás
 - 🖥️ **Feedback de verdad** — panel de sesión al arrancar, build con progreso, `doctor` con
   diagnóstico completo y test del firewall en vivo
+- 🪝 **Estado real del agente** — hooks de Claude Code dentro del sandbox reportan
+  ⚙ working / ✓ ready / ● needs you en `ls` y el dashboard, y una **notificación
+  nativa** te avisa cuando un claude detached termina o te necesita
+- 🌱 **Worktrees por sesión** — `cbox new -w` (o `ctrl+w` en el modal): cada agente en su
+  rama `cbox/<nombre>`, el repo intacto; al cerrar, el worktree se limpia si está clean
 
 ## 🚀 Instalación
 
@@ -144,6 +150,8 @@ desde la terminal:
 cd ~/mi-proyecto
 cbox new                 # sesión "sprout-game", se attachea ya
 cbox new feature-x       # segunda sesión del mismo proyecto, en paralelo
+cbox new -w fix-login    # 🌱 en su PROPIO git worktree (rama cbox/fix-login):
+                         #    N claudes sobre el mismo repo sin pisarse
 # … Ctrl+b d para salir dejándola corriendo …
 cbox ls                  # ● attached / ○ detached + estado del contenedor
 cbox attach feat         # vuelve (fuzzy match; alias: cbox a feat)

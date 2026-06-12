@@ -19,10 +19,14 @@ var assetEntrypoint []byte
 //go:embed init-firewall.sh
 var assetFirewall []byte
 
+//go:embed managed-settings.json
+var assetManagedSettings []byte
+
 func assetsHash() string {
 	h := sha256.New()
 	h.Write(assetDockerfile)
 	h.Write(assetEntrypoint)
 	h.Write(assetFirewall)
+	h.Write(assetManagedSettings)
 	return hex.EncodeToString(h.Sum(nil))[:12]
 }

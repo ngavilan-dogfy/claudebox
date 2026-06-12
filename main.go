@@ -34,17 +34,19 @@ func main() {
 	case "cleanup":
 		err = cleanup(cfg)
 	case "new", "n":
-		name := ""
+		name, worktree := "", false
 		var extra []string
-		if len(args) > 1 {
-			if !strings.HasPrefix(args[1], "-") {
-				name = args[1]
-				extra = args[2:]
-			} else {
-				extra = args[1:]
+		for _, a := range args[1:] {
+			switch {
+			case a == "-w" || a == "--worktree":
+				worktree = true
+			case name == "" && !strings.HasPrefix(a, "-"):
+				name = a
+			default:
+				extra = append(extra, a)
 			}
 		}
-		err = newSession(cfg, name, extra)
+		err = newSession(cfg, name, extra, worktree)
 	case "ls":
 		err = lsSessions(cfg)
 	case "attach", "a":
@@ -111,7 +113,7 @@ func dashboard(cfg *Config) error {
 		if err := os.Chdir(action.arg); err != nil {
 			return err
 		}
-		return newSession(loadConfig(), action.name, nil)
+		return newSession(loadConfig(), action.name, nil, action.wt)
 	case "shell":
 		// New shell inside the live session container, as node (the
 		// container itself was started --user root for the firewall).
@@ -136,7 +138,7 @@ func dashboard(cfg *Config) error {
 // dashboard must stay usable on machines without tmux.
 func startPreferManaged(cfg *Config) error {
 	if tmuxNeeded() == nil {
-		return newSession(cfg, "", nil)
+		return newSession(cfg, "", nil, false)
 	}
 	return session(cfg, "run", nil)
 }
@@ -187,6 +189,11 @@ func runSessionForeground(cfg *Config, profile string, extra []string) error {
 // sessionRunLoop is what a managed tmux session actually runs: claude in the
 // foreground, and a small menu when it exits instead of dying abruptly.
 func sessionRunLoop(cfg *Config, extra []string) error {
+	if sess := os.Getenv("CBOX_SESSION"); sess != "" {
+		stop := make(chan struct{})
+		defer close(stop)
+		go watchAndNotify(sess, stop)
+	}
 	for {
 		runSessionForeground(cfg, "run", extra)
 		switch exitMenu() {
@@ -367,7 +374,7 @@ func gitConfigValue(key, def string) string {
 func usage() {
 	fmt.Print(bold("cbox") + dim(" — Claude Code in a throwaway Docker sandbox\n\n") +
 		bold("managed sessions") + dim("  (survive closing the terminal; tmux-backed)\n") +
-		"  cbox new [name] [args...]    start + attach a named session here\n" +
+		"  cbox new [-w] [name] [args]  start + attach a session here (-w: own git worktree)\n" +
 		"  cbox ls                      list sessions (attached/detached, container state)\n" +
 		"  cbox attach [name]           re-attach (fuzzy match; alias: a)\n" +
 		"  cbox kill <name|--all>       close session and its container\n\n" +

@@ -17,6 +17,26 @@ import (
 // authVolume holds the single login shared by all cbox sessions and envs.
 const authVolume = "claude-box-auth"
 
+func agentStateDir(key string) string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "state", "cbox", "agent", key)
+}
+
+// readAgentState returns working/ready/attention for the first key that has
+// a state file (managed sessions are keyed by session, direct runs by
+// container name).
+func readAgentState(keys ...string) string {
+	for _, k := range keys {
+		if k == "" {
+			continue
+		}
+		if b, err := os.ReadFile(filepath.Join(agentStateDir(k), "state")); err == nil {
+			return strings.TrimSpace(string(b))
+		}
+	}
+	return ""
+}
+
 const rootGuard = `if [ "$(id -u)" = 0 ]; then
   echo "cbox: still root after entrypoint — stale image. Run: cbox update" >&2
   exit 1
@@ -40,9 +60,10 @@ func buildImage(cfg *Config, pull, bust bool) error {
 	}
 	defer os.RemoveAll(dir)
 	for name, data := range map[string][]byte{
-		"Dockerfile":       assetDockerfile,
-		"entrypoint.sh":    assetEntrypoint,
-		"init-firewall.sh": assetFirewall,
+		"Dockerfile":            assetDockerfile,
+		"entrypoint.sh":         assetEntrypoint,
+		"init-firewall.sh":      assetFirewall,
+		"managed-settings.json": assetManagedSettings,
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), data, 0o755); err != nil {
 			return err
@@ -108,8 +129,19 @@ func sessionArgs(cfg *Config, inner []string) []string {
 	pwd, _ := os.Getwd()
 	project := unsafeChars.ReplaceAllString(filepath.Base(pwd), "")
 
+	containerName := fmt.Sprintf("cbox-%s-%d-%04d", project, os.Getpid(), rand.Intn(10000))
+	// Agent state (working/ready/attention) written by in-container hooks,
+	// read instantly from the host by the dashboard and the notifier.
+	stateKey := os.Getenv("CBOX_SESSION")
+	if stateKey == "" {
+		stateKey = containerName
+	}
+	stateDir := agentStateDir(stateKey)
+	os.MkdirAll(stateDir, 0o755)
+
 	a := []string{"run", "--rm", "-i", "--init",
-		"--name", fmt.Sprintf("cbox-%s-%d-%04d", project, os.Getpid(), rand.Intn(10000)),
+		"--name", containerName,
+		"-v", stateDir + ":/cbox-state",
 		"--hostname", "cbox-" + project,
 		"--label", "cbox", "--label", "cbox.env=" + cfg.EnvName(),
 		"--label", "cbox.session=" + os.Getenv("CBOX_SESSION"),

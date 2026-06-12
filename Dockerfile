@@ -22,6 +22,9 @@ RUN if [ "$USER_UID" != "1000" ] || [ "$USER_GID" != "1000" ]; then \
 
 COPY init-firewall.sh /usr/local/bin/init-firewall.sh
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+# Agent-state hooks (UserPromptSubmit/Stop/Notification -> /cbox-state/state);
+# managed settings have highest precedence and we own the image.
+COPY managed-settings.json /etc/claude-code/managed-settings.json
 RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/entrypoint.sh \
  && mkdir -p /home/node/.claude /home/node/.ssh \
  && chown -R node:node /home/node/.claude /home/node/.ssh \

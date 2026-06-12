@@ -22,6 +22,7 @@ type uiAction struct {
 	kind string // "attach" | "shell" | "project" | "env-session" | "new"
 	arg  string
 	name string // session name for "new"
+	wt   bool   // run in a fresh git worktree
 }
 
 const (
@@ -142,6 +143,8 @@ type uiModel struct {
 	mode         string // "" | "name" | "pickdir" | "confirm"
 	input        textinput.Model
 	namingDir    string
+	namingGit    bool
+	wtOn         bool
 	picker       list.Model
 	pickerPath   string
 	pickPreview  string
@@ -559,9 +562,14 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "esc":
 				m.mode = ""
 				return m, nil
+			case "ctrl+w":
+				if m.namingGit {
+					m.wtOn = !m.wtOn
+				}
+				return m, nil
 			case "enter":
 				m.action = &uiAction{kind: "new", arg: m.namingDir,
-					name: strings.TrimSpace(m.input.Value())}
+					name: strings.TrimSpace(m.input.Value()), wt: m.wtOn}
 				return m, tea.Quit
 			}
 			var cmd tea.Cmd
@@ -722,6 +730,9 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m uiModel) toNaming(dir string) uiModel {
 	m.mode = "name"
 	m.namingDir = dir
+	st, err := os.Stat(filepath.Join(dir, ".git"))
+	m.namingGit = err == nil && st.IsDir()
+	m.wtOn = false
 	m.input = textinput.New()
 	m.input.Placeholder = "empty = auto (branch name)"
 	m.input.Focus()
@@ -734,6 +745,15 @@ func (m uiModel) toNaming(dir string) uiModel {
 
 func (m uiModel) View() string {
 	left := " ◆ claudebox "
+	need := 0
+	for _, it := range m.lists[tabSessions].Items() {
+		if s, ok := it.(sessionItem); ok && strings.Contains(s.d, "needs you") {
+			need++
+		}
+	}
+	if need > 0 {
+		left += fmt.Sprintf("· %d need you ", need)
+	}
 	right := " " + m.account + " · shared login "
 	gap := m.width - 2 - utf8.RuneCountInString(left) - utf8.RuneCountInString(right)
 	if gap < 1 {
@@ -780,10 +800,18 @@ func (m uiModel) bodyView() string {
 			title+"\n"+panes)
 
 	case "name":
+		wtLine := ""
+		if m.namingGit {
+			state := descStyle.Render("off")
+			if m.wtOn {
+				state = okStyle.Render("ON — own branch cbox/<name>, repo untouched")
+			}
+			wtLine = "\n" + descStyle.Render("worktree: ") + state + descStyle.Render("  (ctrl+w)")
+		}
 		box := modalStyle.Render(
 			titleStyle.Render("new session") + "\n" +
 				descStyle.Render("in "+collapseHome(m.namingDir)) + "\n\n" +
-				"name: " + m.input.View())
+				"name: " + m.input.View() + wtLine)
 		return lipgloss.Place(m.width-2, bodyH, lipgloss.Center, lipgloss.Center, box)
 
 	case "confirm":
@@ -848,12 +876,18 @@ func (m uiModel) sessionPane(w, h int) string {
 	case it.attached:
 		state = okStyle.Render("● attached")
 	}
+	st := readAgentState(it.id, it.cont.Name)
+	if st == "" {
+		st = m.agentState // screen heuristic as fallback
+	}
 	agent := ""
-	switch m.agentState {
+	switch st {
 	case "working":
 		agent = "  " + warnStyle.Render("⚙ working")
 	case "ready":
 		agent = "  " + okStyle.Render("✓ ready for you")
+	case "attention":
+		agent = "  " + dangerStyle.Render("● needs your input")
 	}
 	box := "starting…"
 	if it.cont.Name != "" {
@@ -919,10 +953,19 @@ func loadSessionItems(cfg *Config) []list.Item {
 		if c.Name != "" {
 			contState = "up " + c.Up + " · env " + c.Env
 		}
+		d := state + " · " + contState
+		switch readAgentState(s.Name) {
+		case "working":
+			d = "⚙ working · " + d
+		case "ready":
+			d = "✓ ready · " + d
+		case "attention":
+			d = "● needs you · " + d
+		}
 		items = append(items, sessionItem{
 			kind: "managed", id: s.Name, path: s.Path,
 			attached: s.Attached, cont: c,
-			t: title, d: state + " · " + contState,
+			t: title, d: d,
 		})
 	}
 

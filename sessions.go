@@ -7,9 +7,53 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// ---- per-session git worktrees ------------------------------------------------
+
+func worktreeBase() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "state", "cbox", "worktrees")
+}
+
+// createWorktree adds a worktree for sess on a fresh cbox/<branch> branch.
+func createWorktree(repo, sess, branch string) (string, error) {
+	wtdir := filepath.Join(worktreeBase(), sess)
+	os.MkdirAll(worktreeBase(), 0o755)
+	br := "cbox/" + branch
+	var lastErr []byte
+	for i := 0; i < 5; i++ {
+		candidate := br
+		if i > 0 {
+			candidate = fmt.Sprintf("%s-%d", br, i+1)
+		}
+		out, err := exec.Command("git", "-C", repo, "worktree", "add", wtdir, "-b", candidate).CombinedOutput()
+		if err == nil {
+			os.WriteFile(filepath.Join(worktreeBase(), sess+".meta"), []byte(repo), 0o644)
+			return wtdir, nil
+		}
+		lastErr = out
+	}
+	return "", fmt.Errorf("git worktree: %s", strings.TrimSpace(string(lastErr)))
+}
+
+// removeWorktree cleans up a session's worktree if it exists and is clean;
+// dirty worktrees are kept (the work matters more than tidiness).
+func removeWorktree(sess string) {
+	meta := filepath.Join(worktreeBase(), sess+".meta")
+	repoB, err := os.ReadFile(meta)
+	if err != nil {
+		return
+	}
+	wtdir := filepath.Join(worktreeBase(), sess)
+	if exec.Command("git", "-C", strings.TrimSpace(string(repoB)),
+		"worktree", "remove", wtdir).Run() == nil {
+		os.Remove(meta)
+	}
+}
 
 // Managed sessions: each one is a named tmux session running a cbox claude
 // session. They survive closing the terminal, you can attach from anywhere,
@@ -64,6 +108,9 @@ func tmuxHas(name string) bool {
 //	prefix+Ctrl-n  next cbox session
 //	prefix+Ctrl-p  previous cbox session
 func ensureTmuxBindings() {
+	if os.Getenv("CBOX_NO_BINDINGS") == "1" {
+		return
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return
@@ -148,7 +195,9 @@ func autoSessionName(pwd string) string {
 
 // newSession creates a detached managed session in the current directory and
 // attaches to it (when on a terminal). extra args go straight to claude.
-func newSession(cfg *Config, custom string, extra []string) error {
+// With worktree, the session runs in a fresh git worktree on branch
+// cbox/<name> — parallel claudes on one repo without stepping on each other.
+func newSession(cfg *Config, custom string, extra []string, worktree bool) error {
 	if err := tmuxNeeded(); err != nil {
 		return err
 	}
@@ -162,16 +211,40 @@ func newSession(cfg *Config, custom string, extra []string) error {
 	}
 	sess := sessionNameFor(pwd, custom)
 	if tmuxHas(sess) {
-		if explicit {
+		// Attaching is only right if it's genuinely the same project —
+		// two different folders sharing a basename must not collide.
+		samePath := false
+		for _, s := range tmuxSessions() {
+			if s.Name == sess && s.Path == pwd {
+				samePath = true
+			}
+		}
+		if explicit && samePath {
 			warnLine("session %s already exists — attaching", sess)
 			return attachSession(sess)
 		}
-		// Auto-named and taken: spin up a parallel sibling instead.
 		base := sess
 		for i := 2; i < 100 && tmuxHas(sess); i++ {
 			sess = fmt.Sprintf("%s-%d", base, i)
 		}
 	}
+	workdir := pwd
+	if worktree {
+		if _, err := os.Stat(filepath.Join(pwd, ".git")); err != nil {
+			return fmt.Errorf("worktree mode needs a git repository at %s", pwd)
+		}
+		branch := custom
+		if branch == "" {
+			branch = "task"
+		}
+		wtdir, err := createWorktree(pwd, sess, unsafeChars.ReplaceAllString(branch, "-"))
+		if err != nil {
+			return err
+		}
+		workdir = wtdir
+		okLine("worktree ready: %s", collapseHome(wtdir))
+	}
+
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -187,7 +260,7 @@ func newSession(cfg *Config, custom string, extra []string) error {
 	for _, a := range extra {
 		inner += fmt.Sprintf(" %q", a)
 	}
-	args := []string{"new-session", "-d", "-s", sess, "-c", pwd, inner}
+	args := []string{"new-session", "-d", "-s", sess, "-c", workdir, inner}
 	if out, err := exec.Command("tmux", args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("tmux: %s", strings.TrimSpace(string(out)))
 	}
@@ -240,7 +313,16 @@ func lsSessions(cfg *Config) error {
 		if c, ok := byCont[s.Name]; ok {
 			cont = "up " + c.Up
 		}
-		fmt.Printf("  %s  %s  %s · %s\n", dot, bold(pad(s.Short(), 24)), dim(pad(s.Path, 36)), cont)
+		badge := dim(pad("", 12))
+		switch readAgentState(s.Name) {
+		case "working":
+			badge = yellow(pad("⚙ working", 12))
+		case "ready":
+			badge = green(pad("✓ ready", 12))
+		case "attention":
+			badge = red(pad("● needs you", 12))
+		}
+		fmt.Printf("  %s  %s %s %s · %s\n", dot, badge, bold(pad(s.Short(), 24)), dim(pad(s.Path, 36)), cont)
 	}
 	fmt.Println(dim("\n  attach: cbox attach <name> · close: cbox kill <name> · dashboard: cbox ui"))
 	return nil
@@ -287,6 +369,56 @@ func killSessionResources(cfg *Config, name string) {
 	exec.Command("tmux", "kill-session", "-t", "="+name).Run()
 	if out, _ := run(cfg, "ps", "-q", "--filter", "label=cbox.session="+name); out != "" {
 		run(cfg, append([]string{"stop", "-t", "3"}, strings.Fields(out)...)...)
+	}
+	os.RemoveAll(agentStateDir(name))
+	removeWorktree(name)
+}
+
+// notifyHost sends a native desktop notification (best effort).
+func notifyHost(title, msg string) {
+	if _, err := exec.LookPath("osascript"); err == nil {
+		exec.Command("osascript", "-e",
+			fmt.Sprintf("display notification %q with title %q sound name \"Glass\"", msg, title)).Run()
+		return
+	}
+	if _, err := exec.LookPath("notify-send"); err == nil {
+		exec.Command("notify-send", title, msg).Run()
+	}
+}
+
+func sessionAttachedNow(name string) bool {
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", "="+name, "#{session_attached}").Output()
+	return err == nil && strings.TrimSpace(string(out)) != "0"
+}
+
+// watchAndNotify pings the host when a DETACHED session's agent finishes or
+// needs input — so backgrounded claudes never wait silently.
+func watchAndNotify(sess string, stop <-chan struct{}) {
+	short := strings.TrimPrefix(sess, tmuxPrefix)
+	last := ""
+	t := time.NewTicker(2 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			st := readAgentState(sess)
+			if st == last {
+				continue
+			}
+			prev := last
+			last = st
+			if prev == "" || sessionAttachedNow(sess) {
+				continue
+			}
+			switch st {
+			case "ready":
+				notifyHost("cbox · "+short, "claude finished — ready for you")
+			case "attention":
+				notifyHost("cbox · "+short, "claude needs your input")
+			}
+		}
 	}
 }
 
