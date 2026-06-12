@@ -356,9 +356,9 @@ func (m *uiModel) resize() {
 		listW = m.width * 2 / 5
 	}
 	for i := range m.lists {
-		m.lists[i].SetSize(listW, m.height-7)
+		m.lists[i].SetSize(listW, m.height-8)
 	}
-	m.picker.SetSize(m.width-14, m.height-12)
+	m.picker.SetSize(m.width-14, m.height-13)
 }
 
 func (m *uiModel) clearTransient() {
@@ -607,7 +607,7 @@ func (m uiModel) View() string {
 	}
 	header := barStyle.Render(left + strings.Repeat(" ", gap) + right)
 
-	labels := []string{"1 Sessions", "2 Projects", "3 Envs"}
+	labels := []string{"1 Running claudes", "2 Folders", "3 Profiles"}
 	var tabs []string
 	for i, l := range labels {
 		if i == m.active {
@@ -618,14 +618,21 @@ func (m uiModel) View() string {
 	}
 	tabBar := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
 
+	explain := map[int]string{
+		tabSessions: "claudes alive in sandboxes right now — ● you're inside it · ○ detached: keeps running in the background",
+		tabProjects: "recent folders, nothing running here — enter starts a fresh claude in one",
+		tabEnvs:     "separate profiles: own history & settings per profile (the login is shared)",
+	}[m.active]
+
 	body := m.bodyView()
 	footer := m.footerView()
 
-	return frameStyle.Render(header + "\n" + tabBar + "\n\n" + body + "\n" + footer)
+	return frameStyle.Render(header + "\n" + tabBar + "\n" +
+		descStyle.Render(" "+explain) + "\n\n" + body + "\n" + footer)
 }
 
 func (m uiModel) bodyView() string {
-	bodyH := m.height - 7
+	bodyH := m.height - 8
 
 	switch m.mode {
 	case "pickdir":
@@ -652,7 +659,7 @@ func (m uiModel) bodyView() string {
 	body := m.lists[m.active].View()
 	if m.active == tabSessions || m.active == tabProjects {
 		pw := m.width - m.width*2/5 - 7
-		ph := m.height - 9
+		ph := m.height - 10
 		if pw > 10 && ph > 3 {
 			var inner string
 			if m.active == tabSessions {

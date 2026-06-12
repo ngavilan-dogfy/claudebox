@@ -76,6 +76,8 @@ func main() {
 		if len(args) >= 4 {
 			err = cycleSession(args[1], args[2], args[3])
 		}
+	case "_sessionrun":
+		err = sessionRunLoop(cfg, args[1:])
 	case "yolo":
 		err = session(cfg, "yolo", args[1:])
 	case "shell":
@@ -139,23 +141,63 @@ func startPreferManaged(cfg *Config) error {
 	return session(cfg, "run", nil)
 }
 
-func session(cfg *Config, profile string, extra []string) error {
+func prepareSession(cfg *Config, profile string, extra []string) ([]string, error) {
 	if err := guardHome(cfg); err != nil {
-		return err
+		return nil, err
 	}
 	pwd, _ := os.Getwd()
 	recordProject(pwd)
 	if !imageExists(cfg) {
 		fmt.Println(dim("first run for this image version — building the sandbox (cached afterwards)"))
 		if err := buildImage(cfg, false, false); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	ensureGitconfigTemplate(cfg)
 	maybeSeedEnv(cfg)
 
 	printHeader(cfg, profile)
-	return execRuntime(cfg, sessionArgs(cfg, innerCommand(profile, extra)))
+	return sessionArgs(cfg, innerCommand(profile, extra)), nil
+}
+
+func session(cfg *Config, profile string, extra []string) error {
+	argv, err := prepareSession(cfg, profile, extra)
+	if err != nil {
+		return err
+	}
+	return execRuntime(cfg, argv)
+}
+
+// runSessionForeground runs claude as a child instead of exec'ing, so the
+// managed-session wrapper regains control when claude exits.
+func runSessionForeground(cfg *Config, profile string, extra []string) error {
+	argv, err := prepareSession(cfg, profile, extra)
+	if err != nil {
+		return err
+	}
+	path, err := exec.LookPath(cfg.Runtime)
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(path, argv...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	return cmd.Run()
+}
+
+// sessionRunLoop is what a managed tmux session actually runs: claude in the
+// foreground, and a small menu when it exits instead of dying abruptly.
+func sessionRunLoop(cfg *Config, extra []string) error {
+	for {
+		runSessionForeground(cfg, "run", extra)
+		switch exitMenu() {
+		case "r":
+			continue
+		case "u":
+			return dashboard(cfg)
+		default:
+			return nil
+		}
+	}
 }
 
 // Mounting your home (or an ancestor of it) hands the agent your real SSH

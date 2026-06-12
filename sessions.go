@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // Managed sessions: each one is a named tmux session running a cbox claude
@@ -175,11 +177,13 @@ func newSession(cfg *Config, custom string, extra []string) error {
 		return err
 	}
 	// Env via command prefix, not tmux's -e flag: -e needs tmux >= 3.2
-	// (Ubuntu 20.04 / Debian 11 ship older).
-	inner := fmt.Sprintf("CBOX_SESSION=%q exec %q", sess, exe)
+	// (Ubuntu 20.04 / Debian 11 ship older). _sessionrun wraps claude so
+	// exiting it offers restart/dashboard/close instead of dying abruptly.
+	inner := ""
 	if cfg.Env != "" {
-		inner += fmt.Sprintf(" %q", "@"+cfg.Env)
+		inner = fmt.Sprintf("CBOX_ENV=%q ", cfg.Env)
 	}
+	inner += fmt.Sprintf("CBOX_SESSION=%q %q _sessionrun", sess, exe)
 	for _, a := range extra {
 		inner += fmt.Sprintf(" %q", a)
 	}
@@ -284,6 +288,42 @@ func killSessionResources(cfg *Config, name string) {
 	if out, _ := run(cfg, "ps", "-q", "--filter", "label=cbox.session="+name); out != "" {
 		run(cfg, append([]string{"stop", "-t", "3"}, strings.Fields(out)...)...)
 	}
+}
+
+// exitMenu shows a tiny key menu after claude exits inside a managed
+// session, instead of slamming the user back to a dead terminal.
+type exitModel struct{ choice string }
+
+func (e exitModel) Init() tea.Cmd { return nil }
+func (e exitModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if k, ok := msg.(tea.KeyMsg); ok {
+		switch k.String() {
+		case "r":
+			e.choice = "r"
+		case "u", "d":
+			e.choice = "u"
+		default:
+			e.choice = "q"
+		}
+		return e, tea.Quit
+	}
+	return e, nil
+}
+func (e exitModel) View() string {
+	return "\n  " + titleStyle.Render("claude exited") + "  " +
+		descStyle.Render("— this sandbox session is still yours") + "\n\n  " +
+		hintBar("r", "restart claude here", "u", "dashboard", "q", "close session") + "\n"
+}
+
+func exitMenu() string {
+	out, err := tea.NewProgram(exitModel{}).Run()
+	if err != nil {
+		return "q"
+	}
+	if em, ok := out.(exitModel); ok {
+		return em.choice
+	}
+	return "q"
 }
 
 func killCmd(cfg *Config, arg string) error {

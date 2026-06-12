@@ -68,6 +68,21 @@ Verifica todo con:
 cbox doctor
 ```
 
+## 🧠 El modelo mental (30 segundos)
+
+- **Running claude (sesión)** = un claude **vivo ahora mismo** dentro de un
+  contenedor sandbox, envuelto en tmux. `● attached` = lo tienes delante;
+  `○ detached` = no lo estás mirando pero **sigue corriendo y trabajando**.
+  Cerrar la terminal no lo mata; `x` (o `cbox kill`) sí.
+- **Folder (proyecto)** = solo una carpeta reciente. **Ahí no corre nada** —
+  es el historial de dónde has trabajado, para lanzar un claude nuevo con
+  un enter.
+- **Profile (entorno)** = una configuración separada de claude (su propio
+  historial y settings). El **login es uno y compartido** entre todos.
+- **Al salir de claude** (`/exit`) la sesión **no muere de golpe**: aparece
+  un menú — `r` relanza claude ahí mismo, `u` abre el dashboard, `q` cierra
+  la sesión y su contenedor. Solo `q` (o `x`/`kill`) apaga cosas.
+
 ## 🖥️ Dashboard TUI: `cbox ui`
 
 Centro de control interactivo (Bubble Tea) con tres pestañas y filtrado
