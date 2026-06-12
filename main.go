@@ -105,6 +105,11 @@ func dashboard(cfg *Config) error {
 	switch action.kind {
 	case "attach":
 		return attachSession(action.arg)
+	case "new":
+		if err := os.Chdir(action.arg); err != nil {
+			return err
+		}
+		return newSession(loadConfig(), action.name, nil)
 	case "shell":
 		// New shell inside the live session container, as node (the
 		// container itself was started --user root for the firewall).

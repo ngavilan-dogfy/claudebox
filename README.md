@@ -83,11 +83,13 @@ fuzzy tipo fzf en todas (`/`):
 enter shell into session · x stop · r refresh · / filter · tab switch · q quit
 ```
 
-- **Sessions** — gestionadas (●/○ attached/detached) y directas, con
-  **preview en vivo**: el panel derecho muestra la pantalla real del claude
-  de la sesión seleccionada, refrescada cada 500 ms — ves qué está haciendo
-  cada uno antes de entrar. `enter` se attachea, `n` nueva, `x` cierra con
-  confirmación, `r` refresca.
+- **Sessions** — agrupadas por proyecto, con nombres con sentido
+  (`proyecto › rama` automático). El panel derecho es una **tarjeta de
+  contexto completa**: estado, directorio, git (rama + ficheros modificados),
+  contenedor con uptime y env, **acciones visibles** (`[enter] attach
+  [s] shell [x] close [n] new`), y debajo la **pantalla en vivo** del claude
+  de esa sesión (500 ms). `n` abre un input para nombrar la nueva sesión
+  (vacío = auto por rama); `x` cierra sesión + contenedor con confirmación.
 - **Projects** — historial de proyectos recientes con **preview git**
   (rama, ficheros modificados, últimos commits); `enter` arranca una sesión
   gestionada ahí.

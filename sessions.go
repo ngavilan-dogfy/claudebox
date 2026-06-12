@@ -133,6 +133,17 @@ func sessionNameFor(pwd, custom string) string {
 	return strings.ReplaceAll(name, ".", "_")
 }
 
+// autoSessionName derives a meaningful default: the git branch when it's
+// not main/master (so "sprout-game › fix-login"), nothing otherwise.
+func autoSessionName(pwd string) string {
+	out, _ := exec.Command("git", "-C", pwd, "branch", "--show-current").Output()
+	br := strings.TrimSpace(string(out))
+	if br == "main" || br == "master" {
+		return ""
+	}
+	return br
+}
+
 // newSession creates a detached managed session in the current directory and
 // attaches to it (when on a terminal). extra args go straight to claude.
 func newSession(cfg *Config, custom string, extra []string) error {
@@ -143,10 +154,21 @@ func newSession(cfg *Config, custom string, extra []string) error {
 		return err
 	}
 	pwd, _ := os.Getwd()
+	explicit := custom != ""
+	if !explicit {
+		custom = autoSessionName(pwd)
+	}
 	sess := sessionNameFor(pwd, custom)
 	if tmuxHas(sess) {
-		warnLine("session %s already exists — attaching", sess)
-		return attachSession(sess)
+		if explicit {
+			warnLine("session %s already exists — attaching", sess)
+			return attachSession(sess)
+		}
+		// Auto-named and taken: spin up a parallel sibling instead.
+		base := sess
+		for i := 2; i < 100 && tmuxHas(sess); i++ {
+			sess = fmt.Sprintf("%s-%d", base, i)
+		}
 	}
 	exe, err := os.Executable()
 	if err != nil {
@@ -175,14 +197,21 @@ func newSession(cfg *Config, custom string, extra []string) error {
 	return nil
 }
 
-// containersBySession maps cbox.session label -> "uptime" for the ls join.
-func containersBySession(cfg *Config) map[string]string {
+type containerInfo struct {
+	Name, Env, Up, Image string
+}
+
+// containersBySession joins containers to their managed session by label.
+func containersBySession(cfg *Config) map[string]containerInfo {
 	out, _ := run(cfg, "ps", "--filter", "label=cbox",
-		"--format", `{{.Label "cbox.session"}}\t{{.RunningFor}}`)
-	m := map[string]string{}
+		"--format", `{{.Label "cbox.session"}}\t{{.Names}}\t{{.Label "cbox.env"}}\t{{.RunningFor}}\t{{.Image}}`)
+	m := map[string]containerInfo{}
 	for _, line := range strings.Split(out, "\n") {
-		if f := strings.Split(line, "\t"); len(f) == 2 && f[0] != "" {
-			m[f[0]] = strings.TrimSuffix(f[1], " ago")
+		if f := strings.Split(line, "\t"); len(f) == 5 && f[0] != "" {
+			m[f[0]] = containerInfo{
+				Name: f[1], Env: f[2],
+				Up: strings.TrimSuffix(f[3], " ago"), Image: f[4],
+			}
 		}
 	}
 	return m
@@ -204,8 +233,8 @@ func lsSessions(cfg *Config) error {
 			dot = green("● attached")
 		}
 		cont := dim("container starting…")
-		if up, ok := byCont[s.Name]; ok {
-			cont = "up " + up
+		if c, ok := byCont[s.Name]; ok {
+			cont = "up " + c.Up
 		}
 		fmt.Printf("  %s  %s  %s · %s\n", dot, bold(pad(s.Short(), 24)), dim(pad(s.Path, 36)), cont)
 	}
