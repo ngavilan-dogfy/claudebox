@@ -31,16 +31,33 @@ const (
 )
 
 var (
-	accent       = lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#A78BFA"}
-	subtle       = lipgloss.AdaptiveColor{Light: "#9B9B9B", Dark: "#5C5C5C"}
-	titleStyle   = lipgloss.NewStyle().Bold(true).Foreground(accent)
-	tabActive    = lipgloss.NewStyle().Bold(true).Foreground(accent).Underline(true).Padding(0, 2)
-	tabInactive  = lipgloss.NewStyle().Foreground(subtle).Padding(0, 2)
-	footerStyle  = lipgloss.NewStyle().Foreground(subtle)
-	statusStyle  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#B58900", Dark: "#FFCC66"})
-	accountStyle = lipgloss.NewStyle().Foreground(subtle)
-	frameStyle   = lipgloss.NewStyle().Padding(0, 1)
+	accent      = lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#A78BFA"}
+	subtle      = lipgloss.AdaptiveColor{Light: "#9B9B9B", Dark: "#5C5C5C"}
+	greenC      = lipgloss.AdaptiveColor{Light: "#1A7F37", Dark: "#3FB950"}
+	yellowC     = lipgloss.AdaptiveColor{Light: "#9A6700", Dark: "#D29922"}
+	redC        = lipgloss.AdaptiveColor{Light: "#CF222E", Dark: "#F85149"}
+	titleStyle  = lipgloss.NewStyle().Bold(true).Foreground(accent)
+	barStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(accent)
+	tabActive   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(accent).Padding(0, 2)
+	tabInactive = lipgloss.NewStyle().Foreground(subtle).Padding(0, 2)
+	keyStyle    = lipgloss.NewStyle().Foreground(accent).Bold(true)
+	descStyle   = lipgloss.NewStyle().Foreground(subtle)
+	statusStyle = lipgloss.NewStyle().Foreground(yellowC)
+	okStyle     = lipgloss.NewStyle().Foreground(greenC)
+	warnStyle   = lipgloss.NewStyle().Foreground(yellowC)
+	dangerStyle = lipgloss.NewStyle().Foreground(redC).Bold(true)
+	frameStyle  = lipgloss.NewStyle().Padding(0, 1)
+	modalStyle  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(accent).Padding(1, 3)
+	paneStyle   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(subtle).Padding(0, 1)
 )
+
+func hintBar(pairs ...string) string {
+	var parts []string
+	for i := 0; i+1 < len(pairs); i += 2 {
+		parts = append(parts, keyStyle.Render(pairs[i])+" "+descStyle.Render(pairs[i+1]))
+	}
+	return strings.Join(parts, descStyle.Render("  ·  "))
+}
 
 // ---- items --------------------------------------------------------------------
 
@@ -57,17 +74,10 @@ func (i sessionItem) Title() string       { return i.t }
 func (i sessionItem) Description() string { return i.d }
 func (i sessionItem) FilterValue() string { return i.t + " " + i.d + " " + i.path }
 
-func collapseHome(p string) string {
-	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(p, home) {
-		return "~" + strings.TrimPrefix(p, home)
-	}
-	return p
-}
-
 type projectItem struct{ path string }
 
 func (i projectItem) Title() string       { return filepath.Base(i.path) }
-func (i projectItem) Description() string { return i.path }
+func (i projectItem) Description() string { return collapseHome(i.path) }
 func (i projectItem) FilterValue() string { return i.path }
 
 type envItem struct{ name, vol, email string }
@@ -76,39 +86,68 @@ func (i envItem) Title() string       { return i.name }
 func (i envItem) Description() string { return i.vol + " · " + i.email }
 func (i envItem) FilterValue() string { return i.name }
 
+type dirEntry struct {
+	label  string
+	target string
+	kind   string // "use" | "up" | "dir"
+}
+
+func (d dirEntry) Title() string       { return d.label }
+func (d dirEntry) Description() string { return "" }
+func (d dirEntry) FilterValue() string { return d.label }
+
+func collapseHome(p string) string {
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(p, home) {
+		return "~" + strings.TrimPrefix(p, home)
+	}
+	return p
+}
+
 // ---- async messages -------------------------------------------------------------
 
 type accountMsg string
 type envEmailMsg struct{ vol, email string }
 type sessionsReloadedMsg []list.Item
 type tickMsg time.Time
-type previewMsg struct{ key, content, info string }
+type statsTickMsg time.Time
+type previewMsg struct{ key, content, info, state string }
+type statsMsg struct{ key, line string }
 
 func tickCmd() tea.Cmd {
 	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
+func statsTickCmd() tea.Cmd {
+	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg { return statsTickMsg(t) })
+}
+
 // ---- model -----------------------------------------------------------------------
 
 type uiModel struct {
-	cfg         *Config
-	lists       [3]list.Model
-	active      int
-	account     string
-	width       int
-	height      int
-	pending     string // container name awaiting stop confirmation
-	status      string
-	action      *uiAction
+	cfg     *Config
+	lists   [3]list.Model
+	active  int
+	account string
+	width   int
+	height  int
+	status  string
+	action  *uiAction
+
 	preview     string
 	previewInfo string // git line for the context card
-	naming      bool   // name-input modal open
-	namingDir   string
-	input       textinput.Model
+	agentState  string // "working" | "ready" | ""
+	stats       string // cpu/mem line
+
+	mode         string // "" | "name" | "pickdir" | "confirm"
+	input        textinput.Model
+	namingDir    string
+	picker       list.Model
+	pickerPath   string
+	confirmKind  string
+	confirmID    string
+	confirmLabel string
 }
 
-// previewKey identifies the current selection, so stale async previews can
-// be discarded.
 func (m uiModel) previewKey() string {
 	switch m.active {
 	case tabSessions:
@@ -128,7 +167,7 @@ func (m uiModel) loadPreviewCmd() tea.Cmd {
 	if key == "" {
 		return nil
 	}
-	height := m.height - 11
+	height := m.height - 14
 	var itemPath string
 	if m.active == tabSessions {
 		if it, ok := m.lists[tabSessions].SelectedItem().(sessionItem); ok {
@@ -136,7 +175,7 @@ func (m uiModel) loadPreviewCmd() tea.Cmd {
 		}
 	}
 	return func() tea.Msg {
-		var content, info string
+		var content, info, state string
 		switch {
 		case strings.HasPrefix(key, "s:managed:"):
 			name := strings.TrimPrefix(key, "s:managed:")
@@ -146,7 +185,13 @@ func (m uiModel) loadPreviewCmd() tea.Cmd {
 			if err != nil {
 				content = "(no screen yet)"
 			} else {
-				content = lastNonEmptyLines(string(out), height)
+				full := string(out)
+				content = lastNonEmptyLines(full, height)
+				if strings.Contains(full, "esc to interrupt") {
+					state = "working"
+				} else if strings.Contains(full, "Claude Code") || strings.Contains(full, "❯") {
+					state = "ready"
+				}
 			}
 			info = gitLine(itemPath)
 		case strings.HasPrefix(key, "s:container:"):
@@ -156,7 +201,26 @@ func (m uiModel) loadPreviewCmd() tea.Cmd {
 			path := strings.TrimPrefix(key, "p:")
 			content = gitSummary(path, height)
 		}
-		return previewMsg{key: key, content: content, info: info}
+		return previewMsg{key: key, content: content, info: info, state: state}
+	}
+}
+
+func (m uiModel) loadStatsCmd() tea.Cmd {
+	key := m.previewKey()
+	if m.active != tabSessions || key == "" {
+		return nil
+	}
+	it, ok := m.lists[tabSessions].SelectedItem().(sessionItem)
+	if !ok || it.cont.Name == "" {
+		return nil
+	}
+	cfg, name := m.cfg, it.cont.Name
+	return func() tea.Msg {
+		out, err := run(cfg, "stats", "--no-stream", "--format", "cpu {{.CPUPerc}} · mem {{.MemUsage}}", name)
+		if err != nil || out == "" {
+			return statsMsg{key: key, line: "—"}
+		}
+		return statsMsg{key: key, line: out}
 	}
 }
 
@@ -203,9 +267,10 @@ func gitSummary(path string, height int) string {
 		return "not a git repository"
 	}
 	log, _ := exec.Command("git", "-C", path, "log", "--oneline", "-8").Output()
-	out := strings.TrimSpace(string(branch)) + "\n\nrecent commits:\n" + strings.TrimSpace(string(log))
-	return lastNonEmptyLines(out, 0)
+	return strings.TrimSpace(string(branch)) + "\n\nrecent commits:\n" + strings.TrimSpace(string(log))
 }
+
+// ---- construction ------------------------------------------------------------------
 
 func newDelegate() list.DefaultDelegate {
 	d := list.NewDefaultDelegate()
@@ -224,11 +289,45 @@ func newList(items []list.Item) list.Model {
 	return l
 }
 
+func newPicker(path string) list.Model {
+	d := newDelegate()
+	d.ShowDescription = false
+	d.SetSpacing(0)
+	l := list.New(loadDirItems(path), d, 0, 0)
+	l.SetShowTitle(false)
+	l.SetShowHelp(false)
+	l.SetShowStatusBar(false)
+	l.SetFilteringEnabled(true)
+	l.DisableQuitKeybindings()
+	return l
+}
+
+func loadDirItems(path string) []list.Item {
+	items := []list.Item{
+		dirEntry{label: "✓ start session HERE: " + collapseHome(path), target: path, kind: "use"},
+	}
+	if parent := filepath.Dir(path); parent != path {
+		items = append(items, dirEntry{label: "⬑ ..", target: parent, kind: "up"})
+	}
+	entries, _ := os.ReadDir(path)
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			items = append(items, dirEntry{
+				label: "▸ " + e.Name(), target: filepath.Join(path, e.Name()), kind: "dir",
+			})
+		}
+	}
+	return items
+}
+
 func runTUI(cfg *Config) (*uiAction, error) {
 	m := uiModel{cfg: cfg, account: "…"}
 	m.lists[tabSessions] = newList(loadSessionItems(cfg))
 	m.lists[tabProjects] = newList(loadProjectItems())
 	m.lists[tabEnvs] = newList(loadEnvItems(cfg))
+	home, _ := os.UserHomeDir()
+	m.pickerPath = home
+	m.picker = newPicker(home)
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	out, err := p.Run()
@@ -242,7 +341,7 @@ func runTUI(cfg *Config) (*uiAction, error) {
 }
 
 func (m uiModel) Init() tea.Cmd {
-	cmds := []tea.Cmd{loadAccountCmd(m.cfg), tickCmd()}
+	cmds := []tea.Cmd{loadAccountCmd(m.cfg), tickCmd(), statsTickCmd()}
 	for _, it := range m.lists[tabEnvs].Items() {
 		if e, ok := it.(envItem); ok {
 			cmds = append(cmds, loadEnvEmailCmd(m.cfg, e.vol))
@@ -254,12 +353,19 @@ func (m uiModel) Init() tea.Cmd {
 func (m *uiModel) resize() {
 	listW := m.width - 4
 	if m.active == tabSessions || m.active == tabProjects {
-		listW = m.width * 2 / 5 // left column; preview pane takes the rest
+		listW = m.width * 2 / 5
 	}
 	for i := range m.lists {
 		m.lists[i].SetSize(listW, m.height-7)
 	}
+	m.picker.SetSize(m.width-14, m.height-12)
 }
+
+func (m *uiModel) clearTransient() {
+	m.mode, m.status, m.preview, m.previewInfo, m.agentState, m.stats = "", "", "", "", "", ""
+}
+
+// ---- update -----------------------------------------------------------------------
 
 func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -269,12 +375,28 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
+		if m.mode != "" {
+			return m, tickCmd()
+		}
 		return m, tea.Batch(tickCmd(), m.loadPreviewCmd())
+
+	case statsTickMsg:
+		if m.mode != "" {
+			return m, statsTickCmd()
+		}
+		return m, tea.Batch(statsTickCmd(), m.loadStatsCmd())
 
 	case previewMsg:
 		if msg.key == m.previewKey() {
 			m.preview = msg.content
 			m.previewInfo = msg.info
+			m.agentState = msg.state
+		}
+		return m, nil
+
+	case statsMsg:
+		if msg.key == m.previewKey() {
+			m.stats = msg.line
 		}
 		return m, nil
 
@@ -298,15 +420,25 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// Name-input modal captures everything until enter/esc.
-		if m.naming {
+		switch m.mode {
+		case "confirm":
+			switch msg.String() {
+			case "y", "Y":
+				kind, id := m.confirmKind, m.confirmID
+				m.mode = ""
+				m.status = "closing " + m.confirmLabel + "…"
+				return m, stopSessionCmd(m.cfg, kind, id)
+			default:
+				m.mode, m.status = "", ""
+				return m, nil
+			}
+
+		case "name":
 			switch msg.String() {
 			case "esc":
-				m.naming = false
-				m.status = ""
+				m.mode = ""
 				return m, nil
 			case "enter":
-				m.naming = false
 				m.action = &uiAction{kind: "new", arg: m.namingDir,
 					name: strings.TrimSpace(m.input.Value())}
 				return m, tea.Quit
@@ -314,8 +446,38 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
 			return m, cmd
+
+		case "pickdir":
+			if m.picker.FilterState() == list.Filtering {
+				break
+			}
+			switch msg.String() {
+			case "esc":
+				m.mode = ""
+				return m, nil
+			case ".":
+				return m.toNaming(m.pickerPath), textinput.Blink
+			case "enter":
+				if e, ok := m.picker.SelectedItem().(dirEntry); ok {
+					switch e.kind {
+					case "use":
+						return m.toNaming(e.target), textinput.Blink
+					default:
+						m.pickerPath = e.target
+						m.picker.SetItems(loadDirItems(e.target))
+						m.picker.ResetSelected()
+						return m, nil
+					}
+				}
+			}
+			break
 		}
-		// While the fuzzy filter is open, every key belongs to the list.
+		if m.mode == "name" || m.mode == "pickdir" {
+			break
+		}
+
+		// Plain browsing mode below. While the fuzzy filter is open, every
+		// key belongs to the list.
 		if m.lists[m.active].FilterState() == list.Filtering {
 			break
 		}
@@ -325,17 +487,17 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "tab", "right":
 			m.active = (m.active + 1) % 3
-			m.pending, m.status, m.preview = "", "", ""
+			m.clearTransient()
 			m.resize()
 			return m, m.loadPreviewCmd()
 		case "shift+tab", "left":
 			m.active = (m.active + 2) % 3
-			m.pending, m.status, m.preview = "", "", ""
+			m.clearTransient()
 			m.resize()
 			return m, m.loadPreviewCmd()
 		case "1", "2", "3":
 			m.active = int(msg.String()[0] - '1')
-			m.pending, m.status, m.preview = "", "", ""
+			m.clearTransient()
 			m.resize()
 			return m, m.loadPreviewCmd()
 
@@ -346,30 +508,29 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "n":
-			dir := ""
+			start := ""
 			switch m.active {
 			case tabSessions:
 				if it, ok := m.lists[tabSessions].SelectedItem().(sessionItem); ok && it.path != "" {
-					dir = it.path
+					start = it.path
 				}
 			case tabProjects:
 				if it, ok := m.lists[tabProjects].SelectedItem().(projectItem); ok {
-					dir = it.path
+					start = it.path
 				}
 			}
-			if dir == "" {
+			if start == "" {
 				if pwd, err := os.Getwd(); err == nil {
-					dir = pwd
+					start = pwd
+				} else if home, err := os.UserHomeDir(); err == nil {
+					start = home
 				}
 			}
-			m.naming = true
-			m.namingDir = dir
-			m.input = textinput.New()
-			m.input.Placeholder = "empty = auto (branch name)"
-			m.input.Focus()
-			m.input.CharLimit = 40
-			m.input.Width = 36
-			return m, textinput.Blink
+			m.mode = "pickdir"
+			m.pickerPath = start
+			m.picker = newPicker(start)
+			m.resize()
+			return m, nil
 
 		case "s":
 			if m.active == tabSessions {
@@ -381,19 +542,11 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-		case "y":
-			if m.pending != "" {
-				parts := strings.SplitN(m.pending, "\x00", 2)
-				m.pending = ""
-				m.status = "closing " + parts[1] + "…"
-				return m, stopSessionCmd(m.cfg, parts[0], parts[1])
-			}
-
 		case "x":
 			if m.active == tabSessions {
 				if it, ok := m.lists[tabSessions].SelectedItem().(sessionItem); ok {
-					m.pending = it.kind + "\x00" + it.id
-					m.status = "close " + it.t + "? press y to confirm, any key to cancel"
+					m.mode = "confirm"
+					m.confirmKind, m.confirmID, m.confirmLabel = it.kind, it.id, it.t
 					return m, nil
 				}
 			}
@@ -421,19 +574,38 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		if m.pending != "" {
-			m.pending, m.status = "", ""
-		}
 	}
 
 	var cmd tea.Cmd
-	m.lists[m.active], cmd = m.lists[m.active].Update(msg)
+	if m.mode == "pickdir" {
+		m.picker, cmd = m.picker.Update(msg)
+	} else if m.mode == "" {
+		m.lists[m.active], cmd = m.lists[m.active].Update(msg)
+	}
 	return m, cmd
 }
 
+func (m uiModel) toNaming(dir string) uiModel {
+	m.mode = "name"
+	m.namingDir = dir
+	m.input = textinput.New()
+	m.input.Placeholder = "empty = auto (branch name)"
+	m.input.Focus()
+	m.input.CharLimit = 40
+	m.input.Width = 36
+	return m
+}
+
+// ---- view -------------------------------------------------------------------------
+
 func (m uiModel) View() string {
-	header := titleStyle.Render("◆ claudebox") + "  " +
-		accountStyle.Render("login: "+m.account+" · shared by all envs")
+	left := " ◆ claudebox "
+	right := " " + m.account + " · shared login "
+	gap := m.width - 2 - utf8.RuneCountInString(left) - utf8.RuneCountInString(right)
+	if gap < 1 {
+		gap = 1
+	}
+	header := barStyle.Render(left + strings.Repeat(" ", gap) + right)
 
 	labels := []string{"1 Sessions", "2 Projects", "3 Envs"}
 	var tabs []string
@@ -446,14 +618,35 @@ func (m uiModel) View() string {
 	}
 	tabBar := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
 
-	hints := map[int]string{
-		tabSessions: "enter attach · s shell · n new · x close · r refresh · / filter · tab/1-3 switch · q quit",
-		tabProjects: "enter start session there · n new with name · / filter · tab/1-3 switch · q quit",
-		tabEnvs:     "enter start session here with env · / filter · tab/1-3 switch · q quit",
-	}[m.active]
-	footer := footerStyle.Render(hints)
-	if m.status != "" {
-		footer = statusStyle.Render(m.status)
+	body := m.bodyView()
+	footer := m.footerView()
+
+	return frameStyle.Render(header + "\n" + tabBar + "\n\n" + body + "\n" + footer)
+}
+
+func (m uiModel) bodyView() string {
+	bodyH := m.height - 7
+
+	switch m.mode {
+	case "pickdir":
+		title := titleStyle.Render("new session — choose a directory") + "\n" +
+			descStyle.Render(collapseHome(m.pickerPath)) + "\n\n"
+		box := modalStyle.Width(m.width - 10).Render(title + m.picker.View())
+		return lipgloss.Place(m.width-2, bodyH, lipgloss.Center, lipgloss.Center, box)
+
+	case "name":
+		box := modalStyle.Render(
+			titleStyle.Render("new session") + "\n" +
+				descStyle.Render("in "+collapseHome(m.namingDir)) + "\n\n" +
+				"name: " + m.input.View())
+		return lipgloss.Place(m.width-2, bodyH, lipgloss.Center, lipgloss.Center, box)
+
+	case "confirm":
+		box := modalStyle.BorderForeground(redC).Render(
+			dangerStyle.Render("close "+m.confirmLabel+"?") + "\n\n" +
+				descStyle.Render("session and container will be stopped") + "\n\n" +
+				hintBar("y", "confirm", "esc", "cancel"))
+		return lipgloss.Place(m.width-2, bodyH, lipgloss.Center, lipgloss.Center, box)
 	}
 
 	body := m.lists[m.active].View()
@@ -467,56 +660,80 @@ func (m uiModel) View() string {
 			} else {
 				inner = titleStyle.Render("git") + "\n" + truncateLines(m.preview, pw-2, ph-1)
 			}
-			pane := lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).BorderForeground(subtle).
-				Width(pw).Height(ph).Padding(0, 1).
-				Render(inner)
+			pane := paneStyle.Width(pw).Height(ph).Render(inner)
 			body = lipgloss.JoinHorizontal(lipgloss.Top, body, " ", pane)
 		}
 	}
+	return body
+}
 
-	if m.naming {
-		footer = statusStyle.Render("new session in "+collapseHome(m.namingDir)) +
-			"\n name: " + m.input.View() + footerStyle.Render("   enter create · esc cancel")
+func (m uiModel) footerView() string {
+	if m.status != "" {
+		return statusStyle.Render(m.status)
 	}
-
-	return frameStyle.Render(
-		header + "\n" + tabBar + "\n\n" + body + "\n" + footer,
-	)
+	switch m.mode {
+	case "pickdir":
+		return hintBar("enter", "open dir / select ✓", ".", "use current dir", "/", "filter", "esc", "cancel")
+	case "name":
+		return hintBar("enter", "create", "esc", "back")
+	case "confirm":
+		return hintBar("y", "confirm", "esc", "cancel")
+	}
+	switch m.active {
+	case tabSessions:
+		return hintBar("enter", "attach", "s", "shell", "n", "new", "x", "close", "r", "refresh", "/", "filter", "tab", "switch", "q", "quit")
+	case tabProjects:
+		return hintBar("enter", "start session", "n", "new anywhere", "/", "filter", "tab", "switch", "q", "quit")
+	default:
+		return hintBar("enter", "session with env", "/", "filter", "tab", "switch", "q", "quit")
+	}
 }
 
 // sessionPane renders the context card + live screen for the selection.
 func (m uiModel) sessionPane(w, h int) string {
 	it, ok := m.lists[tabSessions].SelectedItem().(sessionItem)
 	if !ok {
-		return dim("no sessions — press n to start one")
+		return descStyle.Render("no sessions — press ") + keyStyle.Render("n") +
+			descStyle.Render(" to start one anywhere")
 	}
-	state := dim("○ detached")
+	state := descStyle.Render("○ detached")
 	switch {
 	case it.kind == "container":
-		state = yellow("unmanaged")
+		state = warnStyle.Render("unmanaged")
 	case it.attached:
-		state = green("● attached")
+		state = okStyle.Render("● attached")
+	}
+	agent := ""
+	switch m.agentState {
+	case "working":
+		agent = "  " + warnStyle.Render("⚙ working")
+	case "ready":
+		agent = "  " + okStyle.Render("✓ ready for you")
 	}
 	box := "starting…"
 	if it.cont.Name != "" {
-		box = it.cont.Name + dim(" · up "+it.cont.Up)
+		box = it.cont.Name + descStyle.Render(" · up "+it.cont.Up+" · env "+it.cont.Env)
 	}
 	info := m.previewInfo
 	if info == "" {
 		info = "…"
 	}
-	actions := footerStyle.Render("[enter] attach   [s] shell   [x] close   [n] new here")
-	if it.kind == "container" {
-		actions = footerStyle.Render("[enter] shell   [x] stop container")
+	stats := m.stats
+	if stats == "" {
+		stats = "…"
 	}
-	card := lipgloss.NewStyle().Bold(true).Foreground(accent).Render(it.t) + "  " + state + "\n" +
-		dim("dir  ") + collapseHome(it.path) + "\n" +
-		dim("git  ") + info + "\n" +
-		dim("box  ") + box + dim(" · env "+it.cont.Env) + "\n" +
+	actions := hintBar("enter", "attach", "s", "shell", "x", "close", "n", "new")
+	if it.kind == "container" {
+		actions = hintBar("enter", "shell", "x", "stop")
+	}
+	card := titleStyle.Render(it.t) + "  " + state + agent + "\n" +
+		descStyle.Render("dir  ") + collapseHome(it.path) + "\n" +
+		descStyle.Render("git  ") + info + "\n" +
+		descStyle.Render("box  ") + box + "\n" +
+		descStyle.Render("res  ") + stats + "\n" +
 		actions
-	sep := dim(strings.Repeat("─", w))
-	screen := truncateLines(m.preview, w, h-8)
+	sep := descStyle.Render(strings.Repeat("─", w))
+	screen := truncateLines(m.preview, w, h-9)
 	return card + "\n" + sep + "\n" + screen
 }
 
