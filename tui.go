@@ -67,6 +67,7 @@ type sessionItem struct {
 	id       string // tmux session name or container name
 	path     string
 	attached bool
+	state    string // working | ready | attention | ""
 	cont     containerInfo
 	t, d     string
 }
@@ -139,6 +140,7 @@ type uiModel struct {
 	previewInfo string // git line for the context card
 	agentState  string // "working" | "ready" | ""
 	stats       string // cpu/mem line
+	paneDiff    bool   // right pane shows the session's diff instead of its screen
 
 	mode         string // "" | "name" | "pickdir" | "confirm"
 	input        textinput.Model
@@ -214,10 +216,16 @@ func (m uiModel) loadPreviewCmd() tea.Cmd {
 			itemPath = it.path
 		}
 	}
+	diffMode := m.paneDiff
 	return func() tea.Msg {
 		var content, info, state string
 		switch {
 		case strings.HasPrefix(key, "s:managed:"):
+			if diffMode {
+				content = gitDiffPreview(itemPath, height)
+				info = gitLine(itemPath)
+				break
+			}
 			name := strings.TrimPrefix(key, "s:managed:")
 			// capture-pane takes pane targets and rejects the "=" exact-match
 			// session prefix; full names are unique enough here.
@@ -299,6 +307,32 @@ func lastNonEmptyLines(s string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// gitDiffPreview shows what a session changed: diffstat plus the head of the
+// colored diff (uncommitted work, which is what a running agent produces).
+func gitDiffPreview(path string, height int) string {
+	if path == "" {
+		return "no path for this session"
+	}
+	stat, err := exec.Command("git", "-C", path, "diff", "--stat").Output()
+	if err != nil {
+		return "not a git repository"
+	}
+	if strings.TrimSpace(string(stat)) == "" {
+		return okStyle.Render("no uncommitted changes") + descStyle.Render(" — working tree clean")
+	}
+	diff, _ := exec.Command("git", "-C", path, "-c", "color.ui=always", "diff").Output()
+	statLines := strings.Split(strings.TrimRight(string(stat), "\n"), "\n")
+	if len(statLines) > 8 {
+		statLines = append(statLines[:8], descStyle.Render("…"))
+	}
+	body := strings.Split(strings.TrimRight(string(diff), "\n"), "\n")
+	budget := height - len(statLines) - 1
+	if budget > 0 && len(body) > budget {
+		body = append(body[:budget], descStyle.Render(fmt.Sprintf("… +%d more lines", len(body)-budget)))
+	}
+	return strings.Join(statLines, "\n") + "\n\n" + strings.Join(body, "\n")
 }
 
 func gitSummary(path string, height int) string {
@@ -478,6 +512,7 @@ func (m *uiModel) resize() {
 
 func (m *uiModel) clearTransient() {
 	m.mode, m.status, m.preview, m.previewInfo, m.agentState, m.stats = "", "", "", "", "", ""
+	m.paneDiff = false
 }
 
 // ---- update -----------------------------------------------------------------------
@@ -508,7 +543,12 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode != "" {
 			return m, statsTickCmd()
 		}
-		return m, tea.Batch(statsTickCmd(), m.loadStatsCmd())
+		cmds := []tea.Cmd{statsTickCmd(), m.loadStatsCmd()}
+		// Live work queue: keep session badges and ordering fresh.
+		if m.active == tabSessions && m.lists[tabSessions].FilterState() != list.Filtering {
+			cmds = append(cmds, reloadSessionsCmd(m.cfg))
+		}
+		return m, tea.Batch(cmds...)
 
 	case previewMsg:
 		if msg.key == m.previewKey() {
@@ -540,7 +580,19 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case sessionsReloadedMsg:
+		selID := ""
+		if it, ok := m.lists[tabSessions].SelectedItem().(sessionItem); ok {
+			selID = it.id
+		}
 		m.lists[tabSessions].SetItems([]list.Item(msg))
+		if selID != "" {
+			for i, it := range m.lists[tabSessions].Items() {
+				if s, ok := it.(sessionItem); ok && s.id == selID {
+					m.lists[tabSessions].Select(i)
+					break
+				}
+			}
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -673,6 +725,13 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.picker = newPicker(start)
 			m.resize()
 			return m, nil
+
+		case "d":
+			if m.active == tabSessions {
+				m.paneDiff = !m.paneDiff
+				m.preview = ""
+				return m, m.loadPreviewCmd()
+			}
 
 		case "s":
 			if m.active == tabSessions {
@@ -854,7 +913,7 @@ func (m uiModel) footerView() string {
 	}
 	switch m.active {
 	case tabSessions:
-		return hintBar("enter", "attach", "s", "shell", "n", "new", "x", "close", "r", "refresh", "/", "filter", "tab", "switch", "q", "quit")
+		return hintBar("enter", "attach", "d", "diff", "s", "shell", "n", "new", "x", "close", "/", "filter", "tab", "switch", "q", "quit")
 	case tabProjects:
 		return hintBar("enter", "start session", "n", "new anywhere", "/", "filter", "tab", "switch", "q", "quit")
 	default:
@@ -901,9 +960,13 @@ func (m uiModel) sessionPane(w, h int) string {
 	if stats == "" {
 		stats = "…"
 	}
-	actions := hintBar("enter", "attach", "s", "shell", "x", "close", "n", "new")
+	actions := hintBar("enter", "attach", "d", "diff", "s", "shell", "x", "close", "n", "new")
 	if it.kind == "container" {
 		actions = hintBar("enter", "shell", "x", "stop")
+	}
+	label := descStyle.Render("live screen") + descStyle.Render("  (d: diff)")
+	if m.paneDiff {
+		label = titleStyle.Render("diff — what this agent changed") + descStyle.Render("  (d: live screen)")
 	}
 	card := titleStyle.Render(it.t) + "  " + state + agent + "\n" +
 		descStyle.Render("dir  ") + collapseHome(it.path) + "\n" +
@@ -912,8 +975,8 @@ func (m uiModel) sessionPane(w, h int) string {
 		descStyle.Render("res  ") + stats + "\n" +
 		actions
 	sep := descStyle.Render(strings.Repeat("─", w))
-	screen := truncateLines(m.preview, w, h-9)
-	return card + "\n" + sep + "\n" + screen
+	screen := truncateLines(m.preview, w, h-10)
+	return card + "\n" + sep + "\n" + label + "\n" + screen
 }
 
 // truncateLines hard-trims preview content so it can never overflow the pane.
@@ -938,12 +1001,21 @@ func loadSessionItems(cfg *Config) []list.Item {
 
 	byCont := containersBySession(cfg)
 	for _, s := range tmuxSessions() {
-		project := unsafeChars.ReplaceAllString(filepath.Base(s.Path), "")
-		project = strings.ReplaceAll(project, ".", "_")
-		title := strings.ReplaceAll(filepath.Base(s.Path), ".", "_")
+		base := filepath.Base(s.Path)
+		wtMark := ""
+		// Worktree sessions live under worktreeBase; name them after the repo.
+		if strings.HasPrefix(s.Path, worktreeBase()) {
+			if repo, err := os.ReadFile(filepath.Join(worktreeBase(), s.Name+".meta")); err == nil {
+				base = filepath.Base(strings.TrimSpace(string(repo)))
+				wtMark = " 🌱"
+			}
+		}
+		project := strings.ReplaceAll(unsafeChars.ReplaceAllString(base, ""), ".", "_")
+		title := strings.ReplaceAll(base, ".", "_")
 		if suffix := strings.TrimPrefix(s.Short(), project); suffix != "" && suffix != s.Short() {
 			title += " › " + strings.TrimPrefix(suffix, "-")
 		}
+		title += wtMark
 		state := "○ detached"
 		if s.Attached {
 			state = "● attached"
@@ -954,7 +1026,8 @@ func loadSessionItems(cfg *Config) []list.Item {
 			contState = "up " + c.Up + " · env " + c.Env
 		}
 		d := state + " · " + contState
-		switch readAgentState(s.Name) {
+		ag := readAgentState(s.Name)
+		switch ag {
 		case "working":
 			d = "⚙ working · " + d
 		case "ready":
@@ -964,7 +1037,7 @@ func loadSessionItems(cfg *Config) []list.Item {
 		}
 		items = append(items, sessionItem{
 			kind: "managed", id: s.Name, path: s.Path,
-			attached: s.Attached, cont: c,
+			attached: s.Attached, state: ag, cont: c,
 			t: title, d: d,
 		})
 	}
@@ -984,8 +1057,19 @@ func loadSessionItems(cfg *Config) []list.Item {
 		})
 	}
 
-	// Group visually: same project's sessions end up adjacent.
+	// Work-queue ordering: who needs you floats to the top, then ready,
+	// then working; same project's sessions stay adjacent within a rank.
+	rank := map[string]int{"attention": 0, "ready": 1, "working": 2}
+	prio := func(s string) int {
+		if r, ok := rank[s]; ok {
+			return r
+		}
+		return 3
+	}
 	sort.Slice(items, func(a, b int) bool {
+		if pa, pb := prio(items[a].state), prio(items[b].state); pa != pb {
+			return pa < pb
+		}
 		if items[a].path != items[b].path {
 			return items[a].path < items[b].path
 		}

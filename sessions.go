@@ -265,7 +265,7 @@ func newSession(cfg *Config, custom string, extra []string, worktree bool) error
 		return fmt.Errorf("tmux: %s", strings.TrimSpace(string(out)))
 	}
 	ensureTmuxBindings()
-	okLine("session %s started in %s", bold(sess), pwd)
+	okLine("session %s started in %s", bold(sess), collapseHome(workdir))
 	fmt.Println(dim("   attach: cbox attach " + strings.TrimPrefix(sess, tmuxPrefix) +
 		" · inside: Ctrl+b d detach · Ctrl+b Tab dashboard · Ctrl+b C-n/C-p next/prev"))
 	if isTTY(os.Stdin) && isTTY(os.Stdout) {
