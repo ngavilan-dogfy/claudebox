@@ -112,6 +112,7 @@ type tickMsg time.Time
 type statsTickMsg time.Time
 type previewMsg struct{ key, content, info, state string }
 type statsMsg struct{ key, line string }
+type pickPrevMsg struct{ target, content string }
 
 func tickCmd() tea.Cmd {
 	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
@@ -143,9 +144,45 @@ type uiModel struct {
 	namingDir    string
 	picker       list.Model
 	pickerPath   string
+	pickPreview  string
 	confirmKind  string
 	confirmID    string
 	confirmLabel string
+}
+
+// selectedPickTarget is the directory the picker is highlighting.
+func (m uiModel) selectedPickTarget() string {
+	if e, ok := m.picker.SelectedItem().(dirEntry); ok {
+		return e.target
+	}
+	return m.pickerPath
+}
+
+func (m uiModel) loadPickPreviewCmd() tea.Cmd {
+	target := m.selectedPickTarget()
+	max := m.height - 16
+	return func() tea.Msg {
+		return pickPrevMsg{target: target, content: dirPreview(target, max)}
+	}
+}
+
+// enterDir moves the picker into a directory.
+func (m *uiModel) enterDir(path string) {
+	m.pickerPath = path
+	m.picker.SetItems(loadDirItems(path))
+	m.picker.ResetSelected()
+	m.pickPreview = ""
+}
+
+// pickerDims returns left width, preview width and pane height.
+func (m uiModel) pickerDims() (int, int, int) {
+	lw := m.width * 2 / 5
+	if lw < 30 {
+		lw = 30
+	}
+	pw := m.width - lw - 9
+	ph := m.height - 13
+	return lw, pw, ph
 }
 
 func (m uiModel) previewKey() string {
@@ -303,21 +340,95 @@ func newPicker(path string) list.Model {
 }
 
 func loadDirItems(path string) []list.Item {
+	recents := map[string]bool{}
+	for _, p := range readProjectHistory() {
+		recents[p] = true
+	}
 	items := []list.Item{
-		dirEntry{label: "✓ start session HERE: " + collapseHome(path), target: path, kind: "use"},
+		dirEntry{label: "✓ start session in this folder", target: path, kind: "use"},
 	}
 	if parent := filepath.Dir(path); parent != path {
 		items = append(items, dirEntry{label: "⬑ ..", target: parent, kind: "up"})
 	}
 	entries, _ := os.ReadDir(path)
+	var starred, gits, plain []dirEntry
 	for _, e := range entries {
-		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
-			items = append(items, dirEntry{
-				label: "▸ " + e.Name(), target: filepath.Join(path, e.Name()), kind: "dir",
-			})
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		full := filepath.Join(path, e.Name())
+		isGit := false
+		if st, err := os.Stat(filepath.Join(full, ".git")); err == nil && st.IsDir() {
+			isGit = true
+		}
+		d := dirEntry{target: full, kind: "dir"}
+		switch {
+		case recents[full]:
+			d.label = "★ " + e.Name() + " · recent"
+			if isGit {
+				d.label += " · git"
+			}
+			starred = append(starred, d)
+		case isGit:
+			d.label = "▸ " + e.Name() + " · git"
+			gits = append(gits, d)
+		default:
+			d.label = "▸ " + e.Name()
+			plain = append(plain, d)
+		}
+	}
+	for _, group := range [][]dirEntry{starred, gits, plain} {
+		for _, d := range group {
+			items = append(items, d)
 		}
 	}
 	return items
+}
+
+// dirPreview renders the contents of a directory for the right pane.
+func dirPreview(path string, max int) string {
+	head := titleStyle.Render(filepath.Base(path)) + "  " + descStyle.Render(gitLine(path))
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return head + "\n" + descStyle.Render("(unreadable)")
+	}
+	var dirs, files []string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		if e.IsDir() {
+			dirs = append(dirs, keyStyle.Render("▸ ")+e.Name())
+		} else {
+			files = append(files, descStyle.Render("  "+e.Name()))
+		}
+	}
+	all := append(dirs, files...)
+	if len(all) == 0 {
+		all = []string{descStyle.Render("(empty)")}
+	}
+	more := ""
+	if len(all) > max {
+		more = descStyle.Render(fmt.Sprintf("… +%d more", len(all)-max))
+		all = all[:max]
+	}
+	out := head + "\n\n" + strings.Join(all, "\n")
+	if more != "" {
+		out += "\n" + more
+	}
+	return out
+}
+
+func breadcrumb(path string) string {
+	parts := strings.Split(strings.Trim(collapseHome(path), "/"), "/")
+	if parts[0] == "" {
+		parts[0] = "/"
+	}
+	styled := make([]string, len(parts))
+	for i, p := range parts {
+		styled[i] = descStyle.Render(p)
+	}
+	return strings.Join(styled, keyStyle.Render(" ❯ "))
 }
 
 func runTUI(cfg *Config) (*uiAction, error) {
@@ -358,7 +469,8 @@ func (m *uiModel) resize() {
 	for i := range m.lists {
 		m.lists[i].SetSize(listW, m.height-8)
 	}
-	m.picker.SetSize(m.width-14, m.height-13)
+	lw, _, ph := m.pickerDims()
+	m.picker.SetSize(lw-2, ph)
 }
 
 func (m *uiModel) clearTransient() {
@@ -375,10 +487,19 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
-		if m.mode != "" {
-			return m, tickCmd()
+		switch m.mode {
+		case "":
+			return m, tea.Batch(tickCmd(), m.loadPreviewCmd())
+		case "pickdir":
+			return m, tea.Batch(tickCmd(), m.loadPickPreviewCmd())
 		}
-		return m, tea.Batch(tickCmd(), m.loadPreviewCmd())
+		return m, tickCmd()
+
+	case pickPrevMsg:
+		if msg.target == m.selectedPickTarget() {
+			m.pickPreview = msg.content
+		}
+		return m, nil
 
 	case statsTickMsg:
 		if m.mode != "" {
@@ -457,16 +578,29 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case ".":
 				return m.toNaming(m.pickerPath), textinput.Blink
+			case "~":
+				if home, err := os.UserHomeDir(); err == nil {
+					m.enterDir(home)
+					return m, m.loadPickPreviewCmd()
+				}
+			case "h", "left":
+				if parent := filepath.Dir(m.pickerPath); parent != m.pickerPath {
+					m.enterDir(parent)
+					return m, m.loadPickPreviewCmd()
+				}
+			case "l", "right":
+				if e, ok := m.picker.SelectedItem().(dirEntry); ok && e.kind != "use" {
+					m.enterDir(e.target)
+					return m, m.loadPickPreviewCmd()
+				}
 			case "enter":
 				if e, ok := m.picker.SelectedItem().(dirEntry); ok {
 					switch e.kind {
 					case "use":
 						return m.toNaming(e.target), textinput.Blink
 					default:
-						m.pickerPath = e.target
-						m.picker.SetItems(loadDirItems(e.target))
-						m.picker.ResetSelected()
-						return m, nil
+						m.enterDir(e.target)
+						return m, m.loadPickPreviewCmd()
 					}
 				}
 			}
@@ -636,10 +770,14 @@ func (m uiModel) bodyView() string {
 
 	switch m.mode {
 	case "pickdir":
-		title := titleStyle.Render("new session — choose a directory") + "\n" +
-			descStyle.Render(collapseHome(m.pickerPath)) + "\n\n"
-		box := modalStyle.Width(m.width - 10).Render(title + m.picker.View())
-		return lipgloss.Place(m.width-2, bodyH, lipgloss.Center, lipgloss.Center, box)
+		lw, pw, ph := m.pickerDims()
+		title := titleStyle.Render("new session — pick a directory") + "   " + breadcrumb(m.pickerPath)
+		left := paneStyle.Width(lw).Height(ph).Render(m.picker.View())
+		right := paneStyle.Width(pw).Height(ph).Render(
+			truncateLines(m.pickPreview, pw-2, ph))
+		panes := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
+		return lipgloss.Place(m.width-2, bodyH, lipgloss.Center, lipgloss.Center,
+			title+"\n"+panes)
 
 	case "name":
 		box := modalStyle.Render(
@@ -680,7 +818,7 @@ func (m uiModel) footerView() string {
 	}
 	switch m.mode {
 	case "pickdir":
-		return hintBar("enter", "open dir / select ✓", ".", "use current dir", "/", "filter", "esc", "cancel")
+		return hintBar("←/h", "up", "→/l/enter", "open", ".", "start session here", "~", "home", "/", "filter", "esc", "cancel")
 	case "name":
 		return hintBar("enter", "create", "esc", "back")
 	case "confirm":

@@ -124,6 +124,14 @@ cbox instala automáticamente estos atajos en tmux (al crear/attachear):
 Navegación: `tab`/`shift+tab` o `1`/`2`/`3` entre pestañas, `↑↓`/`jk` en las
 listas, `/` filtra, `q` sale.
 
+### Navegador de carpetas (al pulsar `n`)
+
+Estilo ranger, dos paneles: izquierda las carpetas (★ proyectos recientes
+primero, `· git` marca repos), derecha el **contenido en vivo** de la carpeta
+resaltada con su rama y estado git. Breadcrumb del path arriba. Teclas:
+`←/h` subir · `→/l/enter` entrar · `.` empezar sesión aquí · `~` ir a home ·
+`/` filtro fuzzy · `esc` cancelar.
+
 ## 🕹️ Uso
 
 ### Sesiones gestionadas (lo god ✨)
